@@ -210,3 +210,6 @@ data/
 outputs/
 *.pt
 processed_data/
+processed_data
+.python-version
+frames.zip
