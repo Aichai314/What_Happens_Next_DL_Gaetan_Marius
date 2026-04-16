@@ -28,6 +28,7 @@ from tqdm import tqdm
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from models.cnn_baseline import CNNBaseline
 from models.cnn_lstm import CNNLSTM
+from models.first_cnn import FirstCNN
 from utils import build_transforms, set_seed, split_train_val
 
 
@@ -46,6 +47,9 @@ def build_model(cfg: DictConfig) -> nn.Module:
             pretrained=pretrained,
             lstm_hidden_size=int(hidden),
         )
+    if name == "first_cnn":
+        dropout = cfg.model.get("dropout", 0.5)
+        return FirstCNN(num_classes=num_classes, dropout=float(dropout))
 
     raise ValueError(f"Unknown model.name: {name}")
 

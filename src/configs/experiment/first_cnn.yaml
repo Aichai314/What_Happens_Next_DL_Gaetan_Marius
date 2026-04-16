@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - override /model: first_cnn
+
+training:
+  epochs: 10
+  batch_size: 64   # more clips per GPU step → fewer iterations per epoch
+  num_workers: 4
+
+dataset:
+  num_frames: 4    # half the frames per clip → 2× fewer CNN forward passes

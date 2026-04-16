@@ -23,13 +23,7 @@ Use Python 3.10+ and `uv`:
 uv sync
 ```
 
-Run training and evaluation from the **`src/`** directory so Hydra finds `configs/`:
-
-```bash
-cd src
-```
-
-Or from the repo root:
+Run all commands from the **repo root** (Hydra finds `configs/` via the script path automatically):
 
 ```bash
 python src/train.py experiment=cnn_lstm
@@ -65,8 +59,8 @@ python src/train.py experiment=baseline_from_scratch
 This sets the active `model` group (via Hydra `override /model: ...`). You can still override any field:
 
 ```bash
-python train.py experiment=baseline_from_scratch model.pretrained=false dataset.train_dir=/path/to/train
-python train.py training.epochs=10 training.batch_size=16 training.lr=0.0001
+python src/train.py experiment=baseline_from_scratch model.pretrained=false dataset.train_dir=/path/to/train
+python src/train.py training.epochs=10 training.batch_size=16 training.lr=0.0001
 ```
 
 The best checkpoint is written to **`training.checkpoint_path`** (see printed path). It always stores the **full merged Hydra config**, so evaluation and submission reload the same architecture automatically.
@@ -78,11 +72,11 @@ Hydra may create an `outputs/` folder with logs for each run.
 Evaluation uses the **entire** validation set under **`dataset.val_dir`** (no random split). The checkpoint must have been produced by the current `train.py` (it needs the saved `config` inside the `.pt` file).
 
 ```bash
-python evaluate.py training.checkpoint_path=best_model.pt
+python src/evaluate.py
 ```
 
 ```bash
-python evaluate.py training.checkpoint_path=/path/to/ckpt.pt dataset.val_dir=/path/to/val
+python src/evaluate.py training.checkpoint_path=/path/to/ckpt.pt dataset.val_dir=/path/to/val
 ```
 
 ## Creating a submission file
@@ -90,11 +84,11 @@ python evaluate.py training.checkpoint_path=/path/to/ckpt.pt dataset.val_dir=/pa
 Reads test frames from **`dataset.test_dir`**, clip order from **`dataset.test_manifest`**, writes **`dataset.submission_output`**.
 
 ```bash
-python create_submission.py training.checkpoint_path=best_model.pt
+python src/create_submission.py training.checkpoint_path=best_model.pt
 ```
 
 ```bash
-python create_submission.py \
+python src/create_submission.py \
   training.checkpoint_path=best_model.pt \
   dataset.submission_output=../my_submission.csv
 ```
