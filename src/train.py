@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from models.cnn_baseline import CNNBaseline
@@ -62,7 +63,8 @@ def train_one_epoch(
     correct = 0
     total = 0
 
-    for video_batch, labels in data_loader:
+    pbar = tqdm(data_loader, desc="Train", leave=False)
+    for video_batch, labels in pbar:
         # video_batch: (B, T, C, H, W), labels: (B,)
         video_batch = video_batch.to(device)
         labels = labels.to(device)
@@ -77,6 +79,7 @@ def train_one_epoch(
         predictions = logits.argmax(dim=1)
         correct += int((predictions == labels).sum().item())
         total += labels.size(0)
+        pbar.set_postfix(loss=f"{running_loss / max(total, 1):.4f}", acc=f"{correct / max(total, 1):.4f}")
 
     average_loss = running_loss / max(total, 1)
     accuracy = correct / max(total, 1)
@@ -96,7 +99,8 @@ def evaluate_epoch(
     correct = 0
     total = 0
 
-    for video_batch, labels in data_loader:
+    pbar = tqdm(data_loader, desc="Val  ", leave=False)
+    for video_batch, labels in pbar:
         video_batch = video_batch.to(device)
         labels = labels.to(device)
 
@@ -107,6 +111,7 @@ def evaluate_epoch(
         predictions = logits.argmax(dim=1)
         correct += int((predictions == labels).sum().item())
         total += labels.size(0)
+        pbar.set_postfix(loss=f"{running_loss / max(total, 1):.4f}", acc=f"{correct / max(total, 1):.4f}")
 
     average_loss = running_loss / max(total, 1)
     accuracy = correct / max(total, 1)
