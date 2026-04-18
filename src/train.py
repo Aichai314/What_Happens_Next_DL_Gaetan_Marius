@@ -15,6 +15,9 @@ split; the dedicated ``dataset.val_dir`` is for ``evaluate.py`` only.
 
 from __future__ import annotations
 
+import csv
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -28,8 +31,46 @@ from tqdm import tqdm
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from models.cnn_baseline import CNNBaseline
 from models.cnn_lstm import CNNLSTM
+from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
 from utils import build_transforms, set_seed, split_train_val
+
+
+def log_run(cfg: DictConfig, best_val_accuracy: float, duration_s: float, results_path: Path) -> None:
+    """Append one row per completed training run to a shared CSV file."""
+    row = {
+        "timestamp":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "duration_min":    f"{duration_s / 60:.1f}",
+        # model
+        "model":           cfg.model.name,
+        "pretrained":      cfg.model.get("pretrained", False),
+        "num_classes":     cfg.model.num_classes,
+        "d_model":         cfg.model.get("d_model", ""),
+        "nhead":           cfg.model.get("nhead", ""),
+        "num_layers":      cfg.model.get("num_layers", ""),
+        "lstm_hidden":     cfg.model.get("lstm_hidden_size", ""),
+        "dropout":         cfg.model.get("dropout", ""),
+        # training
+        "epochs":          cfg.training.epochs,
+        "batch_size":      cfg.training.batch_size,
+        "lr":              cfg.training.lr,
+        # data
+        "num_frames":      cfg.dataset.num_frames,
+        "val_ratio":       cfg.dataset.val_ratio,
+        "seed":            cfg.dataset.seed,
+        # result
+        "best_val_acc":    f"{best_val_accuracy:.4f}",
+        "checkpoint":      cfg.training.checkpoint_path,
+    }
+
+    write_header = not results_path.exists()
+    with results_path.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+    print(f"  Run logged to {results_path}")
 
 
 def build_model(cfg: DictConfig) -> nn.Module:
@@ -50,6 +91,14 @@ def build_model(cfg: DictConfig) -> nn.Module:
     if name == "first_cnn":
         dropout = cfg.model.get("dropout", 0.5)
         return FirstCNN(num_classes=num_classes, dropout=float(dropout))
+    if name == "cnn3d_transformer":
+        return CNN3DTransformer(
+            num_classes=num_classes,
+            d_model=int(cfg.model.get("d_model", 256)),
+            nhead=int(cfg.model.get("nhead", 8)),
+            num_layers=int(cfg.model.get("num_layers", 4)),
+            dropout=float(cfg.model.get("dropout", 0.1)),
+        )
 
     raise ValueError(f"Unknown model.name: {name}")
 
@@ -190,6 +239,7 @@ def main(cfg: DictConfig) -> None:
 
     best_val_accuracy = 0.0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
+    t_start = time.time()
 
     for epoch in range(int(cfg.training.epochs)):
         train_loss, train_acc = train_one_epoch(
@@ -225,6 +275,9 @@ def main(cfg: DictConfig) -> None:
             )
 
     print(f"Done. Best validation accuracy: {best_val_accuracy:.4f}")
+
+    results_path = checkpoint_path.parent / "training_results.csv"
+    log_run(cfg, best_val_accuracy, time.time() - t_start, results_path)
 
 
 if __name__ == "__main__":

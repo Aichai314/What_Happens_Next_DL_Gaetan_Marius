@@ -1,0 +1,2 @@
+timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lstm_hidden,dropout,epochs,batch_size,lr,num_frames,val_ratio,seed,best_val_acc,checkpoint
+2026-04-18 17:55:29,127.0,cnn3d_transformer,False,33,256,8,6,,0.15,30,8,0.0003,8,0.2,42,0.1212,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt

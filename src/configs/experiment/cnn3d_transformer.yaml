@@ -1,0 +1,17 @@
+# @package _global_
+# python src/train.py experiment=cnn3d_transformer
+defaults:
+  - override /model: cnn3d_transformer
+
+model:
+  num_layers: 6      # plus de profondeur = meilleure expressivité
+  dropout: 0.15      # régularisation légère
+
+training:
+  epochs: 30         # suffisant pour converger from scratch
+  batch_size: 8      # réduire à 4 si OOM GPU
+  lr: 0.0003         # Adam lr optimal pour transformer from scratch
+  num_workers: 4
+
+dataset:
+  num_frames: 8
