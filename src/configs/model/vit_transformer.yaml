@@ -3,7 +3,7 @@ model:
   name: vit_transformer
   pretrained: true
   num_classes: ${num_classes}
-  freeze_vit: true
-  temporal_layers: 4
+  unfreeze_blocks: 4
+  temporal_layers: 6
   temporal_heads: 8
   dropout: 0.1

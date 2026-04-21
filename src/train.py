@@ -104,8 +104,8 @@ def build_model(cfg: DictConfig) -> nn.Module:
     if name == "vit_transformer":
         return ViTTransformer(
             num_classes=num_classes,
-            freeze_vit=bool(cfg.model.get("freeze_vit", True)),
-            temporal_layers=int(cfg.model.get("temporal_layers", 4)),
+            unfreeze_blocks=int(cfg.model.get("unfreeze_blocks", 4)),
+            temporal_layers=int(cfg.model.get("temporal_layers", 6)),
             temporal_heads=int(cfg.model.get("temporal_heads", 8)),
             dropout=float(cfg.model.get("dropout", 0.1)),
         )
@@ -119,24 +119,27 @@ def train_one_epoch(
     loss_fn: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    scaler: torch.cuda.amp.GradScaler,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
+    use_amp = device.type == "cuda"
 
     pbar = tqdm(data_loader, desc="Train", leave=False)
     for video_batch, labels in pbar:
-        # video_batch: (B, T, C, H, W), labels: (B,)
         video_batch = video_batch.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad()
-        logits = model(video_batch)  # (B, num_classes)
-        loss = loss_fn(logits, labels)
-        loss.backward()
-        optimizer.step()
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logits = model(video_batch)
+            loss = loss_fn(logits, labels)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         running_loss += float(loss.item()) * labels.size(0)
         predictions = logits.argmax(dim=1)
@@ -245,7 +248,13 @@ def main(cfg: DictConfig) -> None:
 
     model = build_model(cfg).to(device)
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.training.lr))
+    base_lr = float(cfg.training.lr)
+    if hasattr(model, "get_param_groups"):
+        backbone_lr_factor = float(cfg.training.get("backbone_lr_factor", 0.1))
+        optimizer = torch.optim.Adam(model.get_param_groups(base_lr, backbone_lr_factor))
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=base_lr)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
     best_val_accuracy = 0.0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
@@ -254,7 +263,7 @@ def main(cfg: DictConfig) -> None:
     epoch_bar = tqdm(range(int(cfg.training.epochs)), desc="Epochs", unit="ep")
     for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, loss_fn, optimizer, device
+            model, train_loader, loss_fn, optimizer, device, scaler
         )
         val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
 

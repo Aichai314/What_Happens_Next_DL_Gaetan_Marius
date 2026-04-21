@@ -5,15 +5,16 @@ defaults:
   - override /model: vit_transformer
 
 model:
-  freeze_vit: true       # backbone gelé → seul le temporal transformer s'entraîne
-  temporal_layers: 4
+  unfreeze_blocks: 4    # fine-tune derniers 4 blocs ViT (sur 12)
+  temporal_layers: 6
   dropout: 0.1
 
 training:
   epochs: 20
-  batch_size: 8          # réduire à 4 si OOM (ViT-B est lourd par frame)
-  lr: 0.0001             # lr faible : on fine-tune uniquement le temporal transformer
+  batch_size: 8         # réduire à 4 si OOM
+  lr: 0.0001            # LR du temporal transformer + head
+  backbone_lr_factor: 0.1  # blocs ViT entraînés à lr=0.00001
   num_workers: 4
 
 dataset:
-  num_frames: 8
+  num_frames: 4
