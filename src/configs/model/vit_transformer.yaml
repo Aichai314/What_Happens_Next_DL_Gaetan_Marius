@@ -1,0 +1,9 @@
+# @package _global_
+model:
+  name: vit_transformer
+  pretrained: true
+  num_classes: ${num_classes}
+  freeze_vit: true
+  temporal_layers: 4
+  temporal_heads: 8
+  dropout: 0.1

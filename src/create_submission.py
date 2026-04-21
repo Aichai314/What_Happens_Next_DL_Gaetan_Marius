@@ -176,7 +176,14 @@ def main(cfg: DictConfig) -> None:
     eval_transform = build_transforms(is_training=False, use_imagenet_norm=pretrained)
 
     test_root = Path(cfg.dataset.test_dir).resolve()
-    output_path = Path(cfg.dataset.submission_output).resolve()
+
+    # Auto-name: pretrained_41_56.csv  or  fromscratch_41_56.csv
+    val_accuracy = float(ckpt.get("val_accuracy", 0.0))
+    prefix = "pretrained" if pretrained else "fromscratch"
+    acc_str = f"{val_accuracy * 100:.2f}".replace(".", "_")
+    submissions_dir = checkpoint_path.parent / "submissions"
+    submissions_dir.mkdir(exist_ok=True)
+    output_path = submissions_dir / f"{prefix}_{acc_str}.csv"
     manifest_cfg = cfg.dataset.get("test_manifest")
 
     print(f"Indexing video folders under: {test_root}", flush=True)

@@ -1,0 +1,19 @@
+# @package _global_
+# ViT-B/16 (ImageNet) + Temporal Transformer  —  Track B
+# python src/train.py experiment=vit_transformer
+defaults:
+  - override /model: vit_transformer
+
+model:
+  freeze_vit: true       # backbone gelé → seul le temporal transformer s'entraîne
+  temporal_layers: 4
+  dropout: 0.1
+
+training:
+  epochs: 20
+  batch_size: 8          # réduire à 4 si OOM (ViT-B est lourd par frame)
+  lr: 0.0001             # lr faible : on fine-tune uniquement le temporal transformer
+  num_workers: 4
+
+dataset:
+  num_frames: 8

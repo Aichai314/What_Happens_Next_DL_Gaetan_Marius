@@ -33,6 +33,7 @@ from models.cnn_baseline import CNNBaseline
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
+from models.vit_transformer import ViTTransformer
 from utils import build_transforms, set_seed, split_train_val
 
 
@@ -97,6 +98,15 @@ def build_model(cfg: DictConfig) -> nn.Module:
             d_model=int(cfg.model.get("d_model", 256)),
             nhead=int(cfg.model.get("nhead", 8)),
             num_layers=int(cfg.model.get("num_layers", 4)),
+            dropout=float(cfg.model.get("dropout", 0.1)),
+        )
+
+    if name == "vit_transformer":
+        return ViTTransformer(
+            num_classes=num_classes,
+            freeze_vit=bool(cfg.model.get("freeze_vit", True)),
+            temporal_layers=int(cfg.model.get("temporal_layers", 4)),
+            temporal_heads=int(cfg.model.get("temporal_heads", 8)),
             dropout=float(cfg.model.get("dropout", 0.1)),
         )
 
@@ -241,12 +251,18 @@ def main(cfg: DictConfig) -> None:
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
     t_start = time.time()
 
-    for epoch in range(int(cfg.training.epochs)):
+    epoch_bar = tqdm(range(int(cfg.training.epochs)), desc="Epochs", unit="ep")
+    for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
             model, train_loader, loss_fn, optimizer, device
         )
         val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
 
+        epoch_bar.set_postfix(
+            train_acc=f"{train_acc:.3f}",
+            val_acc=f"{val_acc:.3f}",
+            gap=f"{train_acc - val_acc:+.3f}",
+        )
         print(
             f"Epoch {epoch + 1}/{cfg.training.epochs} | "
             f"train loss {train_loss:.4f} acc {train_acc:.4f} | "
