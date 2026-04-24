@@ -1,0 +1,12 @@
+# @package _global_
+# Baseline experiment: ResNet18 + temporal average pooling
+defaults:
+  - override /model: cnn_baseline
+
+model:
+  pretrained: true
+
+training:
+  epochs: 10
+  batch_size: 128 # Should be just the limit
+  num_workers: 4
