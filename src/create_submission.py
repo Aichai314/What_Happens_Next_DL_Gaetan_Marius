@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 
 from dataset.video_dataset import VideoFrameDataset
 from train import build_model
-from utils import build_transforms, set_seed
+from utils import VideoTransform, build_transforms, set_seed
 
 
 def load_manifest_video_names(manifest_path: Path) -> List[str]:
@@ -173,7 +173,7 @@ def main(cfg: DictConfig) -> None:
 
     num_frames = int(ckpt.get("num_frames", cfg.dataset.num_frames))
     pretrained = bool(ckpt.get("pretrained", cfg.model.pretrained))
-    eval_transform = build_transforms(is_training=False, use_imagenet_norm=pretrained)
+    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=pretrained)
 
     test_root = Path(cfg.dataset.test_dir).resolve()
 

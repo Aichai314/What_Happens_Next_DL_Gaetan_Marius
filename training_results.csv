@@ -2,3 +2,4 @@ timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lst
 2026-04-18 17:55:29,127.0,cnn3d_transformer,False,33,256,8,6,,0.15,30,8,0.0003,8,0.2,42,0.1212,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
 2026-04-21 15:59:47,138.2,vit_transformer,True,33,,,,,0.1,5,8,0.0001,8,0.2,42,0.4156,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
 2026-04-21 18:49:06,38.1,vit_transformer,True,33,,,,,0.1,5,32,0.0001,4,0.2,42,0.5093,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
+2026-04-21 23:40:27,278.6,cnn3d_transformer,False,33,256,8,6,,0.1,60,8,0.001,8,0.2,42,0.0854,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt

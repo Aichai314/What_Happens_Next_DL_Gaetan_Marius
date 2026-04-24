@@ -34,7 +34,7 @@ from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
 from models.vit_transformer import ViTTransformer
-from utils import build_transforms, set_seed, split_train_val
+from utils import VideoTransform, build_transforms, set_seed, split_train_val
 
 
 def log_run(cfg: DictConfig, best_val_accuracy: float, duration_s: float, results_path: Path) -> None:
@@ -211,12 +211,12 @@ def main(cfg: DictConfig) -> None:
 
     # Match normalization to pretrained flag (ImageNet stats when using pretrained weights).
     use_imagenet_norm = bool(cfg.model.pretrained)
-    train_transform = build_transforms(
-        is_training=True, use_imagenet_norm=use_imagenet_norm
-    )
-    eval_transform = build_transforms(
-        is_training=False, use_imagenet_norm=use_imagenet_norm
-    )
+    use_augmentation = bool(cfg.training.get("augmentation", False))
+    if use_augmentation:
+        train_transform = VideoTransform(is_training=True,  use_imagenet_norm=use_imagenet_norm)
+    else:
+        train_transform = build_transforms(is_training=True, use_imagenet_norm=use_imagenet_norm)
+    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=use_imagenet_norm)
 
     train_dataset = VideoFrameDataset(
         root_dir=train_dir,
@@ -247,7 +247,8 @@ def main(cfg: DictConfig) -> None:
     )
 
     model = build_model(cfg).to(device)
-    loss_fn = nn.CrossEntropyLoss()
+    label_smoothing = float(cfg.training.get("label_smoothing", 0.0))
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     base_lr = float(cfg.training.lr)
     if hasattr(model, "get_param_groups"):
         backbone_lr_factor = float(cfg.training.get("backbone_lr_factor", 0.1))
@@ -255,6 +256,11 @@ def main(cfg: DictConfig) -> None:
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=base_lr)
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
+    use_cosine = cfg.training.get("scheduler") == "cosine"
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=int(cfg.training.epochs), eta_min=1e-6
+    ) if use_cosine else None
 
     best_val_accuracy = 0.0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
@@ -267,15 +273,21 @@ def main(cfg: DictConfig) -> None:
         )
         val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
 
+        if scheduler is not None:
+            scheduler.step()
+
+        current_lr = optimizer.param_groups[0]["lr"]
         epoch_bar.set_postfix(
             train_acc=f"{train_acc:.3f}",
             val_acc=f"{val_acc:.3f}",
             gap=f"{train_acc - val_acc:+.3f}",
+            lr=f"{current_lr:.2e}",
         )
         print(
             f"Epoch {epoch + 1}/{cfg.training.epochs} | "
             f"train loss {train_loss:.4f} acc {train_acc:.4f} | "
-            f"val loss {val_loss:.4f} acc {val_acc:.4f}"
+            f"val loss {val_loss:.4f} acc {val_acc:.4f} | "
+            f"lr {current_lr:.2e}"
         )
 
         if val_acc > best_val_accuracy:

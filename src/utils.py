@@ -11,6 +11,8 @@ from typing import List, Tuple
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF
+from PIL import Image
 
 
 def set_seed(seed: int) -> None:
@@ -20,6 +22,79 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+class VideoTransform:
+    """
+    Augmentation cohérente pour un clip vidéo (liste de PIL Images).
+
+    Les transforms SPATIALES (crop, flip, grayscale) utilisent les mêmes
+    paramètres aléatoires pour toutes les frames du clip — indispensable pour
+    ne pas corrompre l'information temporelle.
+
+    Le ColorJitter est appliqué par frame (simule les variations d'exposition
+    caméra entre frames, sans casser la cohérence de l'action).
+
+    __call__(frames: List[PIL.Image]) -> Tensor(T, C, H, W)
+    """
+
+    def __init__(
+        self,
+        is_training: bool = True,
+        use_imagenet_norm: bool = True,
+        image_size: int = 224,
+    ) -> None:
+        self.is_training = is_training
+        self.image_size = image_size
+
+        if use_imagenet_norm:
+            self.mean = [0.485, 0.456, 0.406]
+            self.std  = [0.229, 0.224, 0.225]
+        else:
+            self.mean = [0.5, 0.5, 0.5]
+            self.std  = [0.5, 0.5, 0.5]
+
+        if is_training:
+            self.color_jitter = transforms.ColorJitter(
+                brightness=0.4, contrast=0.4, saturation=0.3, hue=0.1
+            )
+
+    def __call__(self, frames: List[Image.Image]) -> torch.Tensor:
+        # Initialise les paramètres spatiaux (remplacés si is_training)
+        crop_i, crop_j, crop_h, crop_w = 0, 0, frames[0].height, frames[0].width
+        do_flip = False
+        do_gray = False
+
+        if self.is_training:
+            # ── Paramètres spatiaux tirés UNE SEULE FOIS pour tout le clip ──
+            crop_i, crop_j, crop_h, crop_w = transforms.RandomResizedCrop.get_params(  # type: ignore[arg-type]
+                frames[0], scale=[0.7, 1.0], ratio=[3 / 4, 4 / 3]
+            )
+            do_flip = random.random() < 0.5
+            do_gray = random.random() < 0.2
+
+        result: List[torch.Tensor] = []
+        for img in frames:
+            if self.is_training:
+                # Spatial (identique pour toutes les frames)
+                img = TF.resized_crop(  # type: ignore[arg-type]
+                    img, crop_i, crop_j, crop_h, crop_w,
+                    [self.image_size, self.image_size],
+                )
+                if do_flip:
+                    img = TF.hflip(img)  # type: ignore[arg-type]
+                if do_gray:
+                    img = TF.rgb_to_grayscale(img, num_output_channels=3)  # type: ignore[arg-type]
+                # Couleur (par frame — simule variabilité d'exposition)
+                img = self.color_jitter(img)
+            else:
+                img = TF.resize(img, [self.image_size, self.image_size])  # type: ignore[arg-type]
+
+            tensor = TF.to_tensor(img)  # type: ignore[arg-type]
+            tensor = TF.normalize(tensor, self.mean, self.std)
+            result.append(tensor)
+
+        return torch.stack(result)  # (T, C, H, W)
 
 
 def build_transforms(

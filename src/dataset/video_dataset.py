@@ -132,16 +132,20 @@ class VideoFrameDataset(Dataset):
         frame_paths = _list_frame_paths(video_dir)
         indices = _pick_frame_indices(len(frame_paths), self.num_frames)
 
-        frames: List[torch.Tensor] = []
+        pil_frames: List[Image.Image] = []
         for frame_index in indices:
             path = frame_paths[frame_index]
             with Image.open(path) as image:
-                rgb_image = image.convert("RGB")
-            # transform: PIL -> (C, H, W)
-            tensor_chw = self.transform(rgb_image)
-            frames.append(tensor_chw)
+                pil_frames.append(image.convert("RGB"))
 
-        # Stack time dimension: (T, C, H, W)
-        video_tensor = torch.stack(frames, dim=0)
+        # VideoTransform: List[PIL] -> (T, C, H, W) avec augmentation cohérente
+        # Fallback: per-frame transform puis stack (compatibilité ascendante)
+        if callable(self.transform) and hasattr(self.transform, "is_training"):
+            video_tensor = self.transform(pil_frames)
+        else:
+            video_tensor = torch.stack(
+                [self.transform(img) for img in pil_frames], dim=0
+            )
+
         label_tensor = torch.tensor(label, dtype=torch.long)
         return video_tensor, label_tensor

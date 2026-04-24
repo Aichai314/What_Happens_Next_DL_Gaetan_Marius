@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from train import build_model
-from utils import build_transforms, set_seed
+from utils import VideoTransform, build_transforms, set_seed
 
 
 def load_model_from_checkpoint(checkpoint: Dict[str, Any], device: torch.device) -> torch.nn.Module:
@@ -61,7 +61,7 @@ def main(cfg: DictConfig) -> None:
 
     # Normalization must match how the checkpoint was trained (ImageNet stats if pretrained).
     pretrained_used = bool(raw.get("pretrained", cfg.model.pretrained))
-    eval_transform = build_transforms(is_training=False, use_imagenet_norm=pretrained_used)
+    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=pretrained_used)
 
     val_dir = Path(cfg.dataset.val_dir).resolve()
     val_samples = collect_video_samples(val_dir)

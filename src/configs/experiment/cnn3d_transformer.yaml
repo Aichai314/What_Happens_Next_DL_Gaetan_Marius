@@ -4,13 +4,16 @@ defaults:
   - override /model: cnn3d_transformer
 
 model:
-  num_layers: 6      # plus de profondeur = meilleure expressivité
-  dropout: 0.15      # régularisation légère
+  num_layers: 6
+  dropout: 0.1
 
 training:
-  epochs: 30         # suffisant pour converger from scratch
-  batch_size: 8      # réduire à 4 si OOM GPU
-  lr: 0.0003         # Adam lr optimal pour transformer from scratch
+  epochs: 60
+  batch_size: 8
+  lr: 0.001
+  scheduler: cosine        # lr décroît de 0.001 → 1e-6 en cosine sur 60 epochs
+  label_smoothing: 0.1     # évite l'overconfidence, régularise
+  augmentation: true
   num_workers: 4
 
 dataset:
