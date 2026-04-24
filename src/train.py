@@ -19,13 +19,15 @@ import csv
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 
 import hydra
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
+from torchvision.transforms import v2
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from tqdm import tqdm
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
@@ -34,6 +36,7 @@ from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
 from models.vit_transformer import ViTTransformer
+from models.TSM_resnet18 import TSMBaseline
 from utils import VideoTransform, build_transforms, set_seed, split_train_val
 
 
@@ -55,6 +58,8 @@ def log_run(cfg: DictConfig, best_val_accuracy: float, duration_s: float, result
         "epochs":          cfg.training.epochs,
         "batch_size":      cfg.training.batch_size,
         "lr":              cfg.training.lr,
+        "optimizer":       cfg.training.get("optimizer", "adam"),
+        "scheduler":       cfg.training.get("scheduler", "none"),
         # data
         "num_frames":      cfg.dataset.num_frames,
         "val_ratio":       cfg.dataset.val_ratio,
@@ -79,7 +84,10 @@ def build_model(cfg: DictConfig) -> nn.Module:
     name = cfg.model.name
     num_classes = cfg.model.num_classes
     pretrained = cfg.model.pretrained
+    num_frames = cfg.dataset.num_frames
 
+    if name == "tsm_baseline":
+        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained)
     if name == "cnn_baseline":
         return CNNBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_lstm":
@@ -100,7 +108,6 @@ def build_model(cfg: DictConfig) -> nn.Module:
             num_layers=int(cfg.model.get("num_layers", 4)),
             dropout=float(cfg.model.get("dropout", 0.1)),
         )
-
     if name == "vit_transformer":
         return ViTTransformer(
             num_classes=num_classes,
@@ -120,6 +127,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     scaler: torch.cuda.amp.GradScaler,
+    mixup_fn: Optional[v2.MixUp] = None,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
@@ -133,17 +141,32 @@ def train_one_epoch(
         video_batch = video_batch.to(device)
         labels = labels.to(device)
 
+        # Apply Mixup on the GPU if configured
+        if mixup_fn is not None:
+            video_batch, mixup_labels = mixup_fn(video_batch, labels)
+        else:
+            mixup_labels = labels
+
         optimizer.zero_grad()
-        with torch.cuda.amp.autocast(enabled=use_amp):
+        with torch.amp.autocast("cuda",enabled=use_amp):
             logits = model(video_batch)
-            loss = loss_fn(logits, labels)
+            loss = loss_fn(logits, mixup_labels)
+            
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
         running_loss += float(loss.item()) * labels.size(0)
         predictions = logits.argmax(dim=1)
-        correct += int((predictions == labels).sum().item())
+        
+        # If Mixup is used, labels are probabilities (B, C). 
+        # For training accuracy estimation, we compare against the dominant class.
+        if mixup_fn is not None:
+            target_labels = mixup_labels.argmax(dim=1)
+        else:
+            target_labels = labels
+            
+        correct += int((predictions == target_labels).sum().item())
         total += labels.size(0)
         pbar.set_postfix(loss=f"{running_loss / max(total, 1):.4f}", acc=f"{correct / max(total, 1):.4f}")
 
@@ -209,7 +232,6 @@ def main(cfg: DictConfig) -> None:
         seed=int(cfg.dataset.seed),
     )
 
-    # Match normalization to pretrained flag (ImageNet stats when using pretrained weights).
     use_imagenet_norm = bool(cfg.model.pretrained)
     use_augmentation = bool(cfg.training.get("augmentation", False))
     if use_augmentation:
@@ -247,29 +269,58 @@ def main(cfg: DictConfig) -> None:
     )
 
     model = build_model(cfg).to(device)
+    
+    # --- Mixup Configuration ---
+    mixup_alpha = float(cfg.training.get("mixup_alpha", 0.0))
+    mixup_fn = None
+    if mixup_alpha > 0.0:
+        mixup_fn = v2.MixUp(alpha=mixup_alpha, num_classes=int(cfg.model.num_classes))
+
     label_smoothing = float(cfg.training.get("label_smoothing", 0.0))
     loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    
+    # --- Optimizer Configuration (Adam vs AdamW) ---
     base_lr = float(cfg.training.lr)
+    weight_decay = float(cfg.training.get("weight_decay", 1e-4))
+    opt_type = cfg.training.get("optimizer", "adam").lower()
+
     if hasattr(model, "get_param_groups"):
         backbone_lr_factor = float(cfg.training.get("backbone_lr_factor", 0.1))
-        optimizer = torch.optim.Adam(model.get_param_groups(base_lr, backbone_lr_factor))
+        params = model.get_param_groups(base_lr, backbone_lr_factor)
     else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=base_lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+        params = model.parameters()
 
-    use_cosine = cfg.training.get("scheduler") == "cosine"
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=int(cfg.training.epochs), eta_min=1e-6
-    ) if use_cosine else None
+    if opt_type == "adamw":
+        optimizer = torch.optim.AdamW(params, lr=base_lr, weight_decay=weight_decay)
+    else:
+        optimizer = torch.optim.Adam(params, lr=base_lr, weight_decay=weight_decay)
+        
+    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+
+    # --- Scheduler Configuration (Cosine vs Warmup+Cosine) ---
+    sched_type = cfg.training.get("scheduler", "none").lower()
+    total_epochs = int(cfg.training.epochs)
+    
+    if sched_type == "cosine":
+        scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
+    elif sched_type == "warmup_cosine":
+        warmup_epochs = int(cfg.training.get("warmup_epochs", 5))
+        # Linear warmup from 1% of base_lr up to 100%
+        warmup = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
+        # Cosine decay for the remaining epochs
+        cosine = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-6)
+        scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+    else:
+        scheduler = None
 
     best_val_accuracy = 0.0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
     t_start = time.time()
 
-    epoch_bar = tqdm(range(int(cfg.training.epochs)), desc="Epochs", unit="ep")
+    epoch_bar = tqdm(range(total_epochs), desc="Epochs", unit="ep")
     for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, loss_fn, optimizer, device, scaler
+            model, train_loader, loss_fn, optimizer, device, scaler, mixup_fn
         )
         val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
 
@@ -284,7 +335,7 @@ def main(cfg: DictConfig) -> None:
             lr=f"{current_lr:.2e}",
         )
         print(
-            f"Epoch {epoch + 1}/{cfg.training.epochs} | "
+            f"Epoch {epoch + 1}/{total_epochs} | "
             f"train loss {train_loss:.4f} acc {train_acc:.4f} | "
             f"val loss {val_loss:.4f} acc {val_acc:.4f} | "
             f"lr {current_lr:.2e}"
