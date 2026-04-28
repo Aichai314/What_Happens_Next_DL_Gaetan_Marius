@@ -1,6 +1,6 @@
 # @package _global_
 model:
-  name: resnet34_tsm
+  name: convnext_tsm
   num_classes: 33
   pretrained: true
   d_model: 512

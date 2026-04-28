@@ -1,8 +1,8 @@
 # @package _global_
-# ResNet34 + TSM + Temporal Transformer (pretrained backbone)
-# python src/train.py experiment=resnet34_tsm
+# ConvNeXt-Tiny + TSM + Temporal Transformer (pretrained backbone)
+# python src/train.py experiment=convnext_tsm
 defaults:
-  - override /model: resnet34_tsm
+  - override /model: convnext_tsm
 
 training:
   epochs: 30
