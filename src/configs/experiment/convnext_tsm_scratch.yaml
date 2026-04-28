@@ -1,0 +1,26 @@
+# @package _global_
+# ConvNeXt-Tiny + TSM + Temporal Transformer — trained FROM SCRATCH (no ImageNet weights)
+# python src/train.py experiment=convnext_tsm_scratch
+defaults:
+  - override /model: convnext_tsm
+
+model:
+  pretrained: false
+  dropout: 0.2
+
+training:
+  epochs: 60
+  batch_size: 16
+  lr: 0.001
+  optimizer: adamw
+  weight_decay: 0.05
+  backbone_lr_factor: 1.0
+  scheduler: warmup_cosine
+  warmup_epochs: 10
+  mixup_alpha: 0.4
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+
+dataset:
+  num_frames: 8

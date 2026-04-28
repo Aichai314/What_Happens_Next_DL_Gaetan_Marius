@@ -39,6 +39,7 @@ python src/train.py experiment=cnn_lstm
 | `train.py` | Training loop; saves the best checkpoint by validation accuracy (full Hydra config + weights). |
 | `evaluate.py` | Rebuilds the model from the checkpoint config and reports **top-1** and **top-5** on the **full** validation directory (`dataset.val_dir`). |
 | `create_submission.py` | Loads a checkpoint, runs inference on the test split, writes `video_name,predicted_class`. |
+| `confusion_matrix.py` | Loads a checkpoint, runs inference on the validation set, prints per-class recall sorted worst→best and saves a heatmap PNG. |
 | `configs/` | [Hydra](https://hydra.cc/) YAML: **`experiment/`** (choose a preset), **`model/`**, **`data/`**, **`train/`**. |
 
 The main composition file is `configs/config.yaml`. Global values such as `num_classes: 33` apply across model configs.
@@ -99,6 +100,29 @@ CSV format:
 video_name,predicted_class
 video_12345,7
 ```
+
+## Confusion matrix
+
+Identifies which action classes the model handles well and which it struggles with, by running inference on the **full validation set** (`dataset.val_dir`).
+
+```bash
+python src/confusion_matrix.py training.checkpoint_path=$(pwd)/best_model.pt
+```
+
+This prints a table sorted from worst to best per-class recall:
+
+```text
+Action                                             Recall  Correct / Total
+-------------------------------------------------------------------------
+Pretending to pick something up                    23.1%        9 /    39
+Moving something down                              41.0%       16 /    39
+...
+Closing something                                  91.8%       45 /    49
+-------------------------------------------------------------------------
+Overall accuracy                                   67.3%
+```
+
+And saves a normalized heatmap (recall per row) next to the checkpoint, e.g. `outputs/best_model_confusion.png`.
 
 ## Adding a new model
 
