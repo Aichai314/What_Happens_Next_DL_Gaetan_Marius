@@ -33,6 +33,7 @@ from models.cnn_baseline import CNNBaseline
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
+from models.resnet34_tsm_transformer import ResNet34TSMTransformer
 from models.vit_transformer import ViTTransformer
 from utils import VideoTransform, build_transforms, set_seed, split_train_val
 
@@ -99,6 +100,18 @@ def build_model(cfg: DictConfig) -> nn.Module:
             nhead=int(cfg.model.get("nhead", 8)),
             num_layers=int(cfg.model.get("num_layers", 4)),
             dropout=float(cfg.model.get("dropout", 0.1)),
+        )
+
+    if name == "resnet34_tsm":
+        return ResNet34TSMTransformer(
+            num_classes=num_classes,
+            num_frames=int(cfg.dataset.num_frames),
+            pretrained=pretrained,
+            d_model=int(cfg.model.get("d_model", 512)),
+            nhead=int(cfg.model.get("nhead", 4)),
+            num_layers=int(cfg.model.get("num_layers", 2)),
+            dropout=float(cfg.model.get("dropout", 0.1)),
+            fold_div=int(cfg.model.get("fold_div", 8)),
         )
 
     if name == "vit_transformer":

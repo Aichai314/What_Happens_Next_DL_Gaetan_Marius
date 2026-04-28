@@ -1,0 +1,10 @@
+# @package _global_
+model:
+  name: resnet34_tsm
+  num_classes: 33
+  pretrained: true
+  d_model: 512
+  nhead: 4
+  num_layers: 2
+  dropout: 0.1
+  fold_div: 8

@@ -1,0 +1,18 @@
+# @package _global_
+# ResNet34 + TSM + Temporal Transformer (pretrained backbone)
+# python src/train.py experiment=resnet34_tsm
+defaults:
+  - override /model: resnet34_tsm
+
+training:
+  epochs: 30
+  batch_size: 16
+  lr: 0.0003
+  backbone_lr_factor: 0.1
+  scheduler: cosine
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+
+dataset:
+  num_frames: 8
