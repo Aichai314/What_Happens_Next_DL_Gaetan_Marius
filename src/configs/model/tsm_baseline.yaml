@@ -1,0 +1,5 @@
+# @package _global_
+model:
+  name: tsm_baseline
+  pretrained: false
+  num_classes: ${num_classes}

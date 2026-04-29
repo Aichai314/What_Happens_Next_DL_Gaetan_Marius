@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import numpy as np
 import torch
@@ -22,6 +22,8 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 class VideoTransform:
@@ -174,24 +176,36 @@ def split_train_val(
     seed: int,
 ) -> Tuple[List[Tuple[Path, int]], List[Tuple[Path, int]]]:
     """
-    Shuffle then split a list of (video_path, label) into train and validation portions.
-
-    Mirrors a standard random hold-out so train.py and evaluate.py stay consistent.
+    Stratified split of (video_path, label) into train and validation portions.
+    Ensures that every class has the exact same ratio in both sets.
     """
     rng = random.Random(seed)
-    shuffled = list(samples)
-    rng.shuffle(shuffled)
+    
+    # 1. Group samples by class
+    by_class: Dict[int, List[Tuple[Path, int]]] = {}
+    for sample in samples:
+        by_class.setdefault(sample[1], []).append(sample)
 
-    if val_ratio <= 0.0:
-        return shuffled, []
+    train_samples: List[Tuple[Path, int]] = []
+    val_samples: List[Tuple[Path, int]] = []
 
-    n_val = int(round(len(shuffled) * val_ratio))
-    n_val = max(1, n_val) if len(shuffled) > 1 else 0
+    # 2. Split each class individually (Stratification)
+    for cls, cls_samples in by_class.items():
+        rng.shuffle(cls_samples)
+        
+        if val_ratio <= 0.0:
+            train_samples.extend(cls_samples)
+            continue
+            
+        n_val = int(round(len(cls_samples) * val_ratio))
+        # Ensure at least 1 val sample if the class has more than 1 total sample
+        n_val = max(1, n_val) if len(cls_samples) > 1 else 0
 
-    val_samples = shuffled[:n_val]
-    train_samples = shuffled[n_val:]
-    if len(train_samples) == 0:
-        train_samples = val_samples[:-1]
-        val_samples = val_samples[-1:]
+        val_samples.extend(cls_samples[:n_val])
+        train_samples.extend(cls_samples[n_val:])
+
+    # 3. Shuffle the final aggregated lists
+    rng.shuffle(train_samples)
+    rng.shuffle(val_samples)
 
     return train_samples, val_samples

@@ -143,7 +143,23 @@ def train_one_epoch(
 
         # Apply Mixup on the GPU if configured
         if mixup_fn is not None:
+            # 1. Save original shape
+            B, T, C, H, W = video_batch.shape
+            
+            # 2. Collapse Batch and Time: (B, T, C, H, W) -> (B*T, C, H, W)
+            # BUT: Mixup needs to mix videos, not individual frames independently.
+            # So we treat the video as a "thick" image by stacking channels 
+            # OR we apply the same lambda to all frames in a video.
+            
+            # The cleaner way for v2.MixUp with 5D:
+            # Collapse Time into Channels temporarily: (B, T*C, H, W)
+            video_batch = video_batch.view(B, T * C, H, W)
+            
+            # 3. Apply Mixup
             video_batch, mixup_labels = mixup_fn(video_batch, labels)
+            
+            # 4. Restore original 5D shape: (B, T, C, H, W)
+            video_batch = video_batch.view(B, T, C, H, W)
         else:
             mixup_labels = labels
 
@@ -220,17 +236,21 @@ def main(cfg: DictConfig) -> None:
     device = torch.device(device_str)
 
     train_dir = Path(cfg.dataset.train_dir).resolve()
+    val_dir = Path(cfg.dataset.val_dir).resolve()
     all_samples = collect_video_samples(train_dir)
 
     max_samples = cfg.dataset.get("max_samples")
     if max_samples is not None:
         all_samples = all_samples[: int(max_samples)]
+        
+    train_samples = all_samples
+    val_samples = collect_video_samples(val_dir)
 
-    train_samples, val_samples = split_train_val(
-        all_samples,
-        val_ratio=float(cfg.dataset.val_ratio),
-        seed=int(cfg.dataset.seed),
-    )
+    # train_samples, val_samples = split_train_val(
+    #     all_samples,
+    #     val_ratio=float(cfg.dataset.val_ratio),
+    #     seed=int(cfg.dataset.seed),
+    # )
 
     use_imagenet_norm = bool(cfg.model.pretrained)
     use_augmentation = bool(cfg.training.get("augmentation", False))
@@ -247,7 +267,7 @@ def main(cfg: DictConfig) -> None:
         sample_list=train_samples,
     )
     val_dataset = VideoFrameDataset(
-        root_dir=train_dir,
+        root_dir=val_dir,
         num_frames=int(cfg.dataset.num_frames),
         transform=eval_transform,
         sample_list=val_samples,

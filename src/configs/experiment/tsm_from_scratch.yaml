@@ -1,0 +1,24 @@
+# @package _global_
+# TSM + ResNet18  —  Track A
+# python src/train.py experiment=tsm_from_scratch
+defaults:
+  - override /model: tsm_baseline
+
+model:
+  pretrained: false
+
+training:
+  augmentation: true
+  mixup_alpha: 0.8
+  epochs: 30
+  batch_size: 128 # Should be just the limit
+  num_workers: 4
+  lr: 1e-3
+  optimizer: adamw
+  weight_decay: 1e-4
+  scheduler: warmup_cosine
+  warmup_epochs: 3
+  label_smoothing: 0.1 # Highly recommended when training from scratch!
+
+dataset:
+  num_frames: 4
