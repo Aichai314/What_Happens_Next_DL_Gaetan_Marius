@@ -61,7 +61,7 @@ def main(cfg: DictConfig) -> None:
 
     # Normalization must match how the checkpoint was trained (ImageNet stats if pretrained).
     pretrained_used = bool(raw.get("pretrained", cfg.model.pretrained))
-    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=pretrained_used)
+    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=pretrained_used)
 
     val_dir = Path(cfg.dataset.val_dir).resolve()
     val_samples = collect_video_samples(val_dir)

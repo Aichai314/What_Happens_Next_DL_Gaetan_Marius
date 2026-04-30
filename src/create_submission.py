@@ -173,7 +173,7 @@ def main(cfg: DictConfig) -> None:
 
     num_frames = int(ckpt.get("num_frames", cfg.dataset.num_frames))
     pretrained = bool(ckpt.get("pretrained", cfg.model.pretrained))
-    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=pretrained)
+    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=pretrained)
 
     test_root = Path(cfg.dataset.test_dir).resolve()
 

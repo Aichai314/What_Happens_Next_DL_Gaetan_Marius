@@ -3,3 +3,4 @@ model:
   name: tsm_baseline
   pretrained: false
   num_classes: ${num_classes}
+  dropout: 0.0 # No dropout in the baseline

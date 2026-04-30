@@ -1,0 +1,29 @@
+# @package _global_
+# R(2+1)D  —  Track A Overnight Run
+defaults:
+  - override /model: r2plus1d # Assuming you made a basic model yaml for it
+
+model:
+  name: r2plus1d
+  pretrained: false
+
+training:
+  augmentation: true
+  mixup_alpha: 1.0 
+  epochs: 12           # Extended to 50 for the long overnight run
+  batch_size: 48       # About the limit with 25% margin for safety
+  num_workers: 12
+  lr: 1e-3             # Dropped down because batch size is smaller
+  optimizer: adamwd
+  weight_decay: 1e-2  
+  scheduler: warmup_cosine
+  warmup_epochs: 2     # Slightly longer warmup for 3D convolutions
+  label_smoothing: 0.2 
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.5
+  blur_prob: 0.15

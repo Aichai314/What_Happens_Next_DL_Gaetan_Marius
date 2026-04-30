@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Tuple, Dict
 
 import numpy as np
+from omegaconf import DictConfig
 import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
@@ -43,12 +44,14 @@ class VideoTransform:
 
     def __init__(
         self,
+        cfg: DictConfig,
         is_training: bool = True,
         use_imagenet_norm: bool = True,
         image_size: int = 224,
     ) -> None:
         self.is_training = is_training
         self.image_size = image_size
+        self.cfg = cfg
 
         if use_imagenet_norm:
             self.mean = [0.485, 0.456, 0.406]
@@ -66,7 +69,7 @@ class VideoTransform:
         # Temporal Jittering: Simule une frame "droppée" en la dupliquant
         # Force le réseau à ne pas dépendre d'un timing parfait.
         if self.is_training and len(frames) > 2:
-            if random.random() < 0.5: # 50% de chance d'appliquer le drop temporel
+            if random.random() < float(self.cfg.augmentation.temporal_drop_prob): # 50% de chance d'appliquer le drop temporel
                 drop_idx = random.randint(1, len(frames) - 1)
                 frames[drop_idx] = frames[drop_idx - 1]
 
@@ -78,7 +81,14 @@ class VideoTransform:
             crop_i, crop_j, crop_h, crop_w = transforms.RandomResizedCrop.get_params(  
                 frames[0], scale=[0.7, 1.0], ratio=[3 / 4, 4 / 3]
             )
-            do_gray = random.random() < 0.2
+            
+            # CRITICAL: Increase grayscale probability massively (e.g., 80%)
+            # This blinds the model to specific colored objects.
+            do_gray = random.random() < self.cfg.augmentation.grayscale_prob  # 80% de chance de convertir en gris (mais toujours 3 canaux pour la compatibilité) 
+            
+            # CRITICAL: Add Gaussian Blur to destroy sharp background textures
+            do_blur = random.random() < self.cfg.augmentation.blur_prob  # 50% de chance d'appliquer le flou
+            blurer = transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 2.0))
 
         result: List[torch.Tensor] = []
         for img in frames:
@@ -90,6 +100,8 @@ class VideoTransform:
                 )
                 if do_gray:
                     img = TF.rgb_to_grayscale(img, num_output_channels=3)  
+                if do_blur:
+                    img = blurer(img)
                 
                 # Couleur (par frame)
                 img = self.color_jitter(img)

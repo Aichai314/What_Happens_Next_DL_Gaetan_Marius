@@ -37,6 +37,7 @@ from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet18 import TSMBaseline
+from models.r2plus1d_baseline import R2Plus1DBaseline
 from utils import VideoTransform, build_transforms, set_seed, split_train_val
 
 
@@ -87,7 +88,11 @@ def build_model(cfg: DictConfig) -> nn.Module:
     num_frames = cfg.dataset.num_frames
 
     if name == "tsm_baseline":
-        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained)
+        dropout = cfg.model.get("dropout", 0.5)
+        print("Building TSM with dropout, p =", dropout)
+        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained, dropout=float(dropout))
+    if name == "r2plus1d":
+        return R2Plus1DBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_baseline":
         return CNNBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_lstm":
@@ -255,10 +260,10 @@ def main(cfg: DictConfig) -> None:
     use_imagenet_norm = bool(cfg.model.pretrained)
     use_augmentation = bool(cfg.training.get("augmentation", False))
     if use_augmentation:
-        train_transform = VideoTransform(is_training=True,  use_imagenet_norm=use_imagenet_norm)
+        train_transform = VideoTransform(cfg, is_training=True,  use_imagenet_norm=use_imagenet_norm)
     else:
         train_transform = build_transforms(is_training=True, use_imagenet_norm=use_imagenet_norm)
-    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=use_imagenet_norm)
+    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm)
 
     train_dataset = VideoFrameDataset(
         root_dir=train_dir,
@@ -334,10 +339,40 @@ def main(cfg: DictConfig) -> None:
         scheduler = None
 
     best_val_accuracy = 0.0
+    start_epoch = 0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
+    if cfg.training.get("latest_checkpoint_path"):
+        latest_checkpoint_path = Path(cfg.training.latest_checkpoint_path).resolve()
+    else:
+        latest_checkpoint_path = None
+        
+    if cfg.training.get("resume_from", None):
+        print(f"Resuming training from {cfg.training.resume_from}...")
+        checkpoint = torch.load(cfg.training.resume_from, map_location=device)
+        
+        # 1. Restore Weights
+        model.load_state_dict(checkpoint["model_state_dict"])
+        
+        # 2. Restore Optimizer momentum
+        if checkpoint.get("optimizer_state_dict") is not None:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        
+        # 3. Restore Scheduler state (SAFE CHECK)
+        if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+        # Restore Scaler state (SAFE CHECK)
+        if checkpoint.get("scaler_state_dict") is not None:
+            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        
+        # 4. Fast-forward the timeline
+        start_epoch = checkpoint["epoch"] + 1
+        best_val_accuracy = checkpoint.get("val_accuracy", 0.0)
+        print(f"Successfully restored! Resuming at Epoch {start_epoch} with Best Acc {best_val_accuracy:.4f}")
+
     t_start = time.time()
 
-    epoch_bar = tqdm(range(total_epochs), desc="Epochs", unit="ep")
+    epoch_bar = tqdm(range(start_epoch, total_epochs), desc="Epochs", unit="ep")
     for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
             model, train_loader, loss_fn, optimizer, device, scaler, mixup_fn
@@ -361,26 +396,34 @@ def main(cfg: DictConfig) -> None:
             f"lr {current_lr:.2e}"
         )
 
+        payload: Dict[str, Any] = {
+            "epoch": epoch,                                      # Critical: Where did we stop?
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),      # Critical: AdamW momentum
+            "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+            "scaler_state_dict": scaler.state_dict(),
+            "num_classes": int(cfg.model.num_classes),
+            "pretrained": bool(cfg.model.pretrained),
+            "num_frames": int(cfg.dataset.num_frames),
+            "val_accuracy": val_acc,
+            "config": OmegaConf.to_container(cfg, resolve=True),
+        }
+        if cfg.model.name == "cnn_lstm":
+            payload["lstm_hidden_size"] = int(
+                cfg.model.get("lstm_hidden_size", 512)
+            )
         if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
-            payload: Dict[str, Any] = {
-                "model_state_dict": model.state_dict(),
-                "model_name": cfg.model.name,
-                "num_classes": int(cfg.model.num_classes),
-                "pretrained": bool(cfg.model.pretrained),
-                "num_frames": int(cfg.dataset.num_frames),
-                "val_accuracy": val_acc,
-                "config": OmegaConf.to_container(cfg, resolve=True),
-            }
-            if cfg.model.name == "cnn_lstm":
-                payload["lstm_hidden_size"] = int(
-                    cfg.model.get("lstm_hidden_size", 512)
-                )
-
             torch.save(payload, checkpoint_path)
             print(
                 f"  Saved new best model to {checkpoint_path} (val acc={val_acc:.4f})"
             )
+        if latest_checkpoint_path is not None:
+            torch.save(payload, latest_checkpoint_path)
+            print(
+                f"  Saved latest model to {latest_checkpoint_path} (val acc={val_acc:.4f})"
+            )
+        
 
     print(f"Done. Best validation accuracy: {best_val_accuracy:.4f}")
 

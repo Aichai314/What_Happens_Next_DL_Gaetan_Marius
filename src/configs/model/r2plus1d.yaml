@@ -1,0 +1,5 @@
+# @package _global_
+model:
+  name: r2plus1d
+  pretrained: false
+  num_classes: ${num_classes}
