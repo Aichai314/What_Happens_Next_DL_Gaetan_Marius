@@ -10,7 +10,7 @@ model:
 training:
   augmentation: true
   mixup_alpha: 0.8
-  epochs: 30
+  epochs: 120
   batch_size: 128 # Should be just the limit
   num_workers: 4
   lr: 1e-3
@@ -19,6 +19,8 @@ training:
   scheduler: warmup_cosine
   warmup_epochs: 3
   label_smoothing: 0.1 # Highly recommended when training from scratch!
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_TSM.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_TSM.pt
 
 dataset:
   num_frames: 4

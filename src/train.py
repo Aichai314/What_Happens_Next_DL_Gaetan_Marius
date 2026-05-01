@@ -32,12 +32,16 @@ from tqdm import tqdm
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from models.cnn_baseline import CNNBaseline
+from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet18 import TSMBaseline
 from models.r2plus1d_baseline import R2Plus1DBaseline
+from models.vit_small import ViTSmallTransformer
+from models.trn_baseline import TRN
+from models.x3d_xs import X3DXSBaseline
 from utils import VideoTransform, build_transforms, set_seed, split_train_val
 
 
@@ -102,6 +106,18 @@ def build_model(cfg: DictConfig) -> nn.Module:
             pretrained=pretrained,
             lstm_hidden_size=int(hidden),
         )
+    if name == "cnn_gru":
+        return CNNGRU(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            gru_hidden_size=int(cfg.model.get("gru_hidden_size", 128))
+        )
+    if name == "trn_baseline":
+        return TRN(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            relation_hidden_dim=int(cfg.model.get("relation_hidden_dim", 256))
+        )
     if name == "first_cnn":
         dropout = cfg.model.get("dropout", 0.5)
         return FirstCNN(num_classes=num_classes, dropout=float(dropout))
@@ -113,6 +129,8 @@ def build_model(cfg: DictConfig) -> nn.Module:
             num_layers=int(cfg.model.get("num_layers", 4)),
             dropout=float(cfg.model.get("dropout", 0.1)),
         )
+    if name == "x3d_xs":
+        return X3DXSBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "vit_transformer":
         return ViTTransformer(
             num_classes=num_classes,
@@ -120,6 +138,14 @@ def build_model(cfg: DictConfig) -> nn.Module:
             temporal_layers=int(cfg.model.get("temporal_layers", 6)),
             temporal_heads=int(cfg.model.get("temporal_heads", 8)),
             dropout=float(cfg.model.get("dropout", 0.1)),
+        )
+    if name == "vit_small":
+        return ViTSmallTransformer(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            dropout=float(cfg.model.get("dropout", 0.3)),
+            temporal_heads=int(cfg.model.get("temporal_heads", 6)),
+            temporal_layers=int(cfg.model.get("temporal_layers", 4)),
         )
 
     raise ValueError(f"Unknown model.name: {name}")

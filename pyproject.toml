@@ -16,6 +16,7 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "matplotlib>=3.10.9",
     "seaborn>=0.13.2",
+    "pytorchvideo>=0.1.5",
 ]
 
 [tool.uv]

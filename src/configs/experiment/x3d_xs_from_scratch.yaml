@@ -1,0 +1,33 @@
+# @package _global_
+# X3D-XS (From Scratch) — Closed Track Overnight Run
+defaults:
+  - override /model: x3d_xs
+
+model:
+  pretrained: false
+
+training:
+  epochs: 60
+  batch_size: 256
+  lr: 1e-3             # CNNs from scratch learn very efficiently at 1e-3
+  augmentation: true
+  num_workers: 12
+  mixup_alpha: 0.4     # Safe mixup (avoids 50/50 gray mush)
+  optimizer: adamw
+  weight_decay: 1e-2 
+  scheduler: warmup_cosine
+  warmup_epochs: 5
+  label_smoothing: 0.1
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_x3d_xs.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_x3d_xs.pt
+  #resume_from: ${hydra:runtime.cwd}/latest_model_x3d_xs.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.2  # Kept low so it can use color to track objects initially
+  blur_prob: 0.15
+
+# 28.38

@@ -19,7 +19,7 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     val_samples = collect_video_samples(Path(val_dir))
     
-    all_expert_logits = []
+    all_expert_probs = []
     y_true = None  # We will extract labels during the first model's loop
 
     # ---------------------------------------------------------
@@ -50,21 +50,22 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
         loader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=False, num_workers=4)
 
         # 3. Extract Logits
-        model_logits = []
+        model_probs = []
         model_labels = []
         
         for batch, labels in tqdm(loader, desc=f"Extracting Logits"):
             batch = batch.to(device)
             # Get logits and move to CPU immediately
-            logits = model(batch).cpu().numpy()
-            model_logits.append(logits)
+            logits = model(batch)
+            probs = torch.softmax(logits, dim=1).cpu().numpy()
+            model_probs.append(probs)
             
             # We only need to collect true labels once
             if i == 0:
                 model_labels.append(labels.numpy())
 
         # Stack this expert's logits and save to our master list
-        all_expert_logits.append(np.vstack(model_logits))
+        all_expert_probs.append(np.vstack(model_probs))
         
         if i == 0:
             y_true = np.concatenate(model_labels)
@@ -81,9 +82,9 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
     print("\n" + "="*50)
     print("Training N-Expert Meta-Learner...")
     
-    # Horizontally stack all expert logits
+    # Horizontally stack all expert probs
     # If 3 models and 33 classes, X_meta shape becomes [N_videos, 99]
-    X_meta = np.hstack(all_expert_logits)
+    X_meta = np.hstack(all_expert_probs)
     print(f"Combined Feature Shape: {X_meta.shape}")
     
     # Split data: 50% to train the router, 50% to honestly evaluate it[cite: 1]
@@ -105,7 +106,7 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
     # PART 3: BASELINE COMPARISON
     # ---------------------------------------------------------
     print("\n--- Baseline Comparison (on the exact same test split) ---")
-    num_classes = all_expert_logits[0].shape[1]
+    num_classes = all_expert_probs[0].shape[1]
     
     # Calculate standalone accuracy for every expert on the test split
     for i, ckpt_path in enumerate(ckpt_paths):
@@ -125,6 +126,7 @@ if __name__ == "__main__":
     my_models = [
         "best_model_tsm.pt",
         "best_model_r2plus1d.pt",
+        "best_model_cnn_lstm_29-50.pt",
         # Add a 3rd, 4th, or 5th model easily
     ]
     

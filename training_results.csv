@@ -13,3 +13,14 @@ timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lst
 2026-04-30 11:21:09,576.3,r2plus1d,False,33,,,,,,12,48,0.001,adamw,warmup_cosine,4,0.2,42,0.2160,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
 2026-04-30 13:15:10,83.4,tsm_baseline,False,33,,,,,0.0,30,128,0.001,adamw,warmup_cosine,4,0.2,42,0.3475,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
 2026-04-30 16:33:36,102.3,tsm_baseline,False,33,,,,,0.0,30,128,0.001,adamw,warmup_cosine,4,0.2,42,0.3475,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
+2026-04-30 23:13:16,91.7,tsm_baseline,False,33,,,,,0.0,30,128,0.001,adamw,warmup_cosine,4,0.2,42,0.3552,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
+2026-05-01 01:51:34,168.4,vit_small,False,33,,,,,0.3,30,128,0.0001,adamw,warmup_cosine,4,0.2,42,0.1137,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
+2026-05-01 06:08:22,233.8,cnn_lstm,False,33,,,,512,,120,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2947,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_lstm.pt
+2026-05-01 07:47:26,331.0,tsm_baseline,False,33,,,,,0.0,120,128,0.001,adamw,warmup_cosine,4,0.2,42,0.3515,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_TSM.pt
+2026-05-01 15:35:57,300.0,cnn_lstm,False,33,,,,128,,120,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2897,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_lstm.pt
+2026-05-01 16:05:25,274.6,cnn_gru,False,33,,,,,,120,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2850,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_gru.pt
+2026-05-01 20:57:14,137.5,cnn_gru,False,33,,,,,,60,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2875,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_gru.pt
+2026-05-01 21:26:34,154.0,trn_baseline,False,33,,,,,,60,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2735,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_trn.pt
+2026-05-01 23:19:23,92.1,cnn_gru,False,33,,,,,,40,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2949,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_gru.pt
+2026-05-02 01:01:47,92.2,cnn_gru,False,33,,,,,,40,128,0.001,adamw,warmup_cosine,4,0.2,42,0.3029,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_gru.pt
+2026-05-02 01:16:03,104.3,trn_baseline,False,33,,,,,,40,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2838,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_trn.pt

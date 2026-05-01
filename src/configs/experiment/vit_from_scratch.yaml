@@ -1,0 +1,33 @@
+# @package _global_
+# ViT-B/16 (ImageNet) + Temporal Transformer  —  Track B
+# python src/train.py experiment=vit_transformer
+defaults:
+  - override /model: vit_small
+
+model:
+  pretrained: false
+  dropout: 0.3
+
+training:
+  epochs: 30
+  batch_size: 128
+  lr: 1e-4            # LR du temporal transformer + head
+  backbone_lr_factor: 1.0  # blocs ViT entraînés à lr=0.00001
+  augmentation: true
+  num_workers: 12
+  mixup_alpha: 0.8
+  optimizer: adamw
+  weight_decay: 1e-2  
+  scheduler: warmup_cosine
+  warmup_epochs: 3
+  label_smoothing: 0.1
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_ViT.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_ViT.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.3
+  blur_prob: 0.2

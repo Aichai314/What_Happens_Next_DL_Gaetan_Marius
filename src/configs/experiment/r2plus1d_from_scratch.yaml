@@ -9,21 +9,24 @@ model:
 
 training:
   augmentation: true
-  mixup_alpha: 1.0 
-  epochs: 12           # Extended to 50 for the long overnight run
+  mixup_alpha: 0.4
+  epochs: 50           # Extended to 50 for the long overnight run
   batch_size: 48       # About the limit with 25% margin for safety
   num_workers: 12
   lr: 1e-3             # Dropped down because batch size is smaller
-  optimizer: adamwd
+  optimizer: adamw
   weight_decay: 1e-2  
   scheduler: warmup_cosine
-  warmup_epochs: 2     # Slightly longer warmup for 3D convolutions
-  label_smoothing: 0.2 
+  warmup_epochs: 5
+  label_smoothing: 0.1
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_R2Plus1D.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_R2Plus1D.pt
+  resume_from: ${hydra:runtime.cwd}/latest_model_R2Plus1D.pt
 
 dataset:
   num_frames: 4
 
 augmentation:
   temporal_drop_prob: 0.1
-  grayscale_prob: 0.5
+  grayscale_prob: 0.2
   blur_prob: 0.15

@@ -1,0 +1,7 @@
+# @package _global_
+# ResNet18 per frame + GRU over time
+model:
+  name: cnn_gru
+  pretrained: true
+  num_classes: ${num_classes}
+  gru_hidden_size: 128

@@ -1,0 +1,7 @@
+# @package _global_
+# ResNet18 per frame + TRN over time
+model:
+  name: trn_baseline
+  pretrained: true
+  num_classes: ${num_classes}
+  relation_hidden_dim: 256
