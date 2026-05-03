@@ -18,10 +18,10 @@ training:
   weight_decay: 5e-2  
   scheduler: warmup_cosine
   warmup_epochs: 5
-  label_smoothing: 0.15
+  label_smoothing: 0.2
   checkpoint_path: ${hydra:runtime.cwd}/best_model_cnn_gru.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_cnn_gru.pt
-  #resume_from: ${hydra:runtime.cwd}/latest_model_cnn_gru.pt
+  # resume_from: ${hydra:runtime.cwd}/latest_model_cnn_gru.pt
 
 dataset:
   num_frames: 4

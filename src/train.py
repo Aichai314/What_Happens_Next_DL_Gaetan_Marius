@@ -94,7 +94,8 @@ def build_model(cfg: DictConfig) -> nn.Module:
     if name == "tsm_baseline":
         dropout = cfg.model.get("dropout", 0.5)
         print("Building TSM with dropout, p =", dropout)
-        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained, dropout=float(dropout))
+        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained,
+                           dropout=float(dropout), n_div=int(cfg.model.get("fold_div", 8)))
     if name == "r2plus1d":
         return R2Plus1DBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_baseline":

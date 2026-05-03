@@ -5,7 +5,7 @@ defaults:
 
 model:
   pretrained: false
-  relation_hidden_dim: 1024 # 512
+  relation_hidden_dim: 1024
 
 training:
   epochs: 40           # 60 epochs is perfect for an overnight ResNet run
@@ -15,13 +15,13 @@ training:
   num_workers: 12
   mixup_alpha: 0.4     # Safe mixup (avoids 50/50 gray mush)
   optimizer: adamw
-  weight_decay: 2e-2  # 1e-2
+  weight_decay: 2e-2
   scheduler: warmup_cosine
   warmup_epochs: 5
-  label_smoothing: 0.15 # 0.1
+  label_smoothing: 0.15
   checkpoint_path: ${hydra:runtime.cwd}/best_model_trn.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_trn.pt
-  #resume_from: ${hydra:runtime.cwd}/latest_model_trn.pt
+  # resume_from: ${hydra:runtime.cwd}/latest_model_trn.pt
 
 dataset:
   num_frames: 4
@@ -30,5 +30,3 @@ augmentation:
   temporal_drop_prob: 0.1
   grayscale_prob: 0.2  # Kept low so it can use color to track objects initially
   blur_prob: 0.15
-
-# 28.38

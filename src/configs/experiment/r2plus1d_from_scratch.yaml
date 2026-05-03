@@ -15,10 +15,10 @@ training:
   num_workers: 12
   lr: 1e-3             # Dropped down because batch size is smaller
   optimizer: adamw
-  weight_decay: 1e-2  
+  weight_decay: 5e-2  
   scheduler: warmup_cosine
   warmup_epochs: 5
-  label_smoothing: 0.1
+  label_smoothing: 0.2
   checkpoint_path: ${hydra:runtime.cwd}/best_model_R2Plus1D.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_R2Plus1D.pt
   resume_from: ${hydra:runtime.cwd}/latest_model_R2Plus1D.pt

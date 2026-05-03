@@ -70,13 +70,13 @@ def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) ->
     return model
 
 class TSMBaseline(nn.Module):
-    def __init__(self, num_classes: int, num_frames: int, pretrained: bool = False, dropout: float = 0) -> None:
+    def __init__(self, num_classes: int, num_frames: int, pretrained: bool = False, dropout: float = 0, n_div: int = 8) -> None:
         super().__init__()
         weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = models.resnet18(weights=weights)
 
         # Inject the Temporal Shift Module into the backbone
-        backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames)
+        backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)
 
         # Replace the original 1000-way ImageNet head with identity
         feature_dim = backbone.fc.in_features  # 512 for ResNet18

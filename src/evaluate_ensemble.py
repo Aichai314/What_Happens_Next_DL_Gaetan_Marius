@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 import gc
 from pathlib import Path
 from tqdm import tqdm
@@ -7,6 +6,7 @@ from omegaconf import OmegaConf
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+import numpy
 from typing import List
 
 # Import your existing utilities
@@ -65,10 +65,12 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
                 model_labels.append(labels.numpy())
 
         # Stack this expert's logits and save to our master list
-        all_expert_probs.append(np.vstack(model_probs))
+        all_expert_probs.append(numpy.vstack(model_probs))
         
         if i == 0:
-            y_true = np.concatenate(model_labels)
+            y_true = numpy.concatenate(model_labels)
+        
+        print(f"Expert {i+1} accuracy on Validation Set: {accuracy_score(y_true, numpy.argmax(all_expert_probs[-1], axis=1)):.4f}")
 
         # 4. CRITICAL: Clear VRAM before loading the next expert
         del model
@@ -77,57 +79,53 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
         torch.cuda.empty_cache()
 
     # ---------------------------------------------------------
-    # PART 2: META-LEARNER TRAINING
+    # PART 2: BULLETPROOF META-LEARNER TRAINING (K-FOLD)
     # ---------------------------------------------------------
+    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    import numpy as np
+
     print("\n" + "="*50)
-    print("Training N-Expert Meta-Learner...")
+    print("Evaluating N-Expert Meta-Learner with 5-Fold CV...")
     
     # Horizontally stack all expert probs
-    # If 3 models and 33 classes, X_meta shape becomes [N_videos, 99]
-    X_meta = np.hstack(all_expert_probs)
+    X_meta = numpy.hstack(all_expert_probs)
     print(f"Combined Feature Shape: {X_meta.shape}")
     
-    # Split data: 50% to train the router, 50% to honestly evaluate it[cite: 1]
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_meta, y_true, test_size=0.5, random_state=42, stratify=y_true
-    )
-    
-    # Train the Logistic Regression Router[cite: 1]
+    # 1. The Heavy Regularization Model
+    # C=0.1 applies strong L2 regularization to prevent validation memorization
     meta_model = LogisticRegression(max_iter=2000, C=0.1, class_weight='balanced')
-    meta_model.fit(X_train, y_train)
     
-    # Evaluate the Smart Ensemble[cite: 1]
-    meta_preds = meta_model.predict(X_test)
-    final_acc = accuracy_score(y_test, meta_preds)
+    # 2. Stratified K-Fold (The Truth Teller)
+    # Ensures every fold has the exact same ratio of the 33 classes
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     
-    print(f"\n✅ Smart Stacking Accuracy: {final_acc:.4f}")
+    # Run the Cross Validation
+    cv_scores = cross_val_score(meta_model, X_meta, y_true, cv=cv, scoring='accuracy')
     
-    # ---------------------------------------------------------
-    # PART 3: BASELINE COMPARISON
-    # ---------------------------------------------------------
-    print("\n--- Baseline Comparison (on the exact same test split) ---")
-    num_classes = all_expert_probs[0].shape[1]
-    
-    # Calculate standalone accuracy for every expert on the test split
-    for i, ckpt_path in enumerate(ckpt_paths):
-        # Extract just this expert's features from the concatenated test array
-        start_idx = i * num_classes
-        end_idx = (i + 1) * num_classes
-        expert_test_logits = X_test[:, start_idx:end_idx]
+    print("\n✅ K-Fold Validation Results:")
+    for fold, score in enumerate(cv_scores):
+        print(f"   Fold {fold + 1}: {score:.4f}")
         
-        expert_preds = expert_test_logits.argmax(axis=1)
-        expert_acc = accuracy_score(y_test, expert_preds)
-        print(f"Expert {i+1} ({Path(ckpt_path).name}): {expert_acc:.4f}")
+    mean_acc = cv_scores.mean()
+    std_acc = cv_scores.std()
+    print(f"\n🚀 TRUTH SCORE (Mean Accuracy): {mean_acc:.4f} (±{std_acc:.4f})")
+    
+    # 3. Final Deployment
+    # Now that we know it works safely, train the final model on 100% of the Validation Set 
+    # so it is as smart as possible for the Kaggle Test Set.
+    print("\nTraining Final Meta-Learner on 100% of Validation Data for Kaggle Submission...")
+    meta_model.fit(X_meta, y_true)
 
     return meta_model
 
 if __name__ == "__main__":
     # You can now pass any number of models!
     my_models = [
-        "best_model_tsm.pt",
-        "best_model_r2plus1d.pt",
-        "best_model_cnn_lstm_29-50.pt",
-        # Add a 3rd, 4th, or 5th model easily
+        "best_model_tsm_35-72.pt",
+        "best_model_cnn_lstm_30-75.pt",
+        "best_model_trn_29-53.pt",
+        "best_model_x3d_xs_29-44.pt",
+        "best_model_r2plus1d_30-97.pt",
     ]
     
     evaluate_and_stack_n_models(
