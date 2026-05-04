@@ -105,7 +105,7 @@ def main(cfg: DictConfig) -> None:
     # CONFIGURATION: Define your Kaggle Roster here
     # =========================================================
     my_models = [
-        "best_model_tsm_35-80.pt",
+        "best_model_tsm_36-03.pt",
         "best_model_cnn_lstm_30-75.pt",
         "best_model_trn_29-53.pt",
         "best_model_x3d_xs_29-44.pt",

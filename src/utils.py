@@ -64,6 +64,8 @@ class VideoTransform:
             self.color_jitter = transforms.ColorJitter(
                 brightness=0.4, contrast=0.4, saturation=0.3, hue=0.1
             )
+        
+        self.use_frame_differencing = cfg.dataset.get("use_frame_differencing", False)
 
     def __call__(self, frames: List[Image.Image]) -> torch.Tensor:
         # Temporal Jittering: Simule une frame "droppée" en la dupliquant
@@ -111,8 +113,24 @@ class VideoTransform:
             tensor = TF.to_tensor(img)  
             tensor = TF.normalize(tensor, self.mean, self.std)
             result.append(tensor)
+        
+        stacked_frames = torch.stack(result)  # (T, 3, H, W)
+        
+        # =========================================================
+        # EXPLICIT FRAME DIFFERENCING
+        # =========================================================
+        if getattr(self, 'use_frame_differencing', False):
+            # Create a zero tensor for the differences
+            diffs = torch.zeros_like(stacked_frames)
+            
+            # Diff[t] = Frame[t] - Frame[t-1]
+            diffs[1:] = stacked_frames[1:] - stacked_frames[:-1]
+            
+            # Concatenate along the channel dimension (dim=1)
+            # Resulting shape: (T, 6, H, W)
+            stacked_frames = torch.cat([stacked_frames, diffs], dim=1)
 
-        return torch.stack(result)  # (T, C, H, W)
+        return stacked_frames
 
 
 def build_transforms(

@@ -121,7 +121,7 @@ def evaluate_and_stack_n_models(ckpt_paths: List[str], val_dir: str):
 if __name__ == "__main__":
     # You can now pass any number of models!
     my_models = [
-        "best_model_tsm_35-72.pt",
+        "best_model_tsm_36-03.pt",
         "best_model_cnn_lstm_30-75.pt",
         "best_model_trn_29-53.pt",
         "best_model_x3d_xs_29-44.pt",
