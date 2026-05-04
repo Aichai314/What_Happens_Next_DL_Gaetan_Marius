@@ -36,6 +36,8 @@ def load_model_from_checkpoint(checkpoint: Dict[str, Any], device: torch.device)
             "full Hydra config is saved with the weights."
         )
     cfg = OmegaConf.create(checkpoint["config"])
+    # Skip pretrained download — checkpoint weights overwrite them anyway
+    OmegaConf.update(cfg, "model.pretrained", False, force_add=True)
     model = build_model(cfg)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)

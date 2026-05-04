@@ -1,0 +1,22 @@
+# @package _global_
+# VideoMAE base fine-tuned on SSv2, adapted for 33 classes.
+# python src/train.py experiment=videomae_v2
+defaults:
+  - override /model: videomae_v2
+
+training:
+  epochs: 15
+  batch_size: 8
+  lr: 0.0001
+  backbone_lr_factor: 0.01
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: warmup_cosine
+  warmup_epochs: 2
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.2
+
+dataset:
+  num_frames: 16

@@ -109,19 +109,7 @@ Identifies which action classes the model handles well and which it struggles wi
 python src/confusion_matrix.py training.checkpoint_path=$(pwd)/best_model.pt
 ```
 
-This prints a table sorted from worst to best per-class recall:
-
-```text
-Action                                             Recall  Correct / Total
--------------------------------------------------------------------------
-Pretending to pick something up                    23.1%        9 /    39
-Moving something down                              41.0%       16 /    39
-...
-Closing something                                  91.8%       45 /    49
--------------------------------------------------------------------------
-Overall accuracy                                   67.3%
-```
-
+This prints a table sorted from worst to best per-class recall, with precision
 And saves a normalized heatmap (recall per row) next to the checkpoint, e.g. `outputs/best_model_confusion.png`.
 
 ## Adding a new model

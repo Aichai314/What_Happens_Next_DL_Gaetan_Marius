@@ -7,3 +7,5 @@ timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lst
 2026-04-23 20:07:54,37.2,cnn_baseline,True,33,,,,,,10,128,0.0001,8,0.2,42,0.4958,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
 2026-04-24 14:09:28,19.0,cnn_baseline,False,33,,,,,,5,128,0.0001,8,0.2,42,0.2534,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
 2026-04-28 11:53:05,3.5,cnn_baseline,True,33,,,,,,1,8,0.0001,adam,none,8,0.2,42,0.4137,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
+2026-04-28 20:47:44,322.3,videomae_v2,True,33,,,,,,15,8,0.0001,adamw,warmup_cosine,16,0.2,42,0.7544,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model_videomae.pt
+2026-04-29 05:05:12,959.4,convnext_tsm,False,33,512,4,2,,0.2,60,16,0.001,adamw,warmup_cosine,8,0.2,42,0.0846,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model.pt
