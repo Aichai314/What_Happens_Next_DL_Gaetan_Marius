@@ -1,0 +1,30 @@
+# @package _global_
+# TSM + ResNet18  —  Track A
+# python src/train.py experiment=tsm_anti-overfit
+defaults:
+  - override /model: tsm_baseline
+
+model:
+  pretrained: false
+  dropout: 0.5 # Encourage the model to build redundancy
+
+training:
+  augmentation: true
+  mixup_alpha: 1.0 # Push to 1.0 to make blended videos even more chaotic
+  epochs: 30
+  batch_size: 208 # Should be just the limit (with some margin -> around 10% less than max)
+  num_workers: 4
+  lr: 2e-3
+  optimizer: adamw
+  weight_decay: 1e-2  # Increased by 100x (from 1e-4) to heavily penalize memorization
+  scheduler: warmup_cosine
+  warmup_epochs: 3
+  label_smoothing: 0.2 # Increased to 0.2 to prevent the model from being overconfident
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.5
+  grayscale_prob: 0.8
+  blur_prob: 0.5

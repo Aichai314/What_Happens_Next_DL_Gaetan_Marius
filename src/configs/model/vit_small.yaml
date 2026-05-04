@@ -1,0 +1,8 @@
+# @package _global_
+model:
+  name: vit_small
+  pretrained: false
+  num_classes: ${num_classes}
+  dropout: 0.3
+  temporal_heads: 6
+  temporal_layers: 4

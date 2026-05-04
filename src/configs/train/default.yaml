@@ -6,4 +6,5 @@ training:
   num_workers: 2
   # Where to save the best checkpoint (by validation accuracy)
   checkpoint_path: ${hydra:runtime.cwd}/best_model.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model.pt
   device: cuda

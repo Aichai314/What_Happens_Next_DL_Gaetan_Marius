@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import numpy as np
+from omegaconf import DictConfig
 import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
@@ -22,6 +23,8 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 class VideoTransform:
@@ -41,12 +44,14 @@ class VideoTransform:
 
     def __init__(
         self,
+        cfg: DictConfig,
         is_training: bool = True,
         use_imagenet_norm: bool = True,
         image_size: int = 224,
     ) -> None:
         self.is_training = is_training
         self.image_size = image_size
+        self.cfg = cfg
 
         if use_imagenet_norm:
             self.mean = [0.485, 0.456, 0.406]
@@ -64,7 +69,7 @@ class VideoTransform:
         # Temporal Jittering: Simule une frame "droppée" en la dupliquant
         # Force le réseau à ne pas dépendre d'un timing parfait.
         if self.is_training and len(frames) > 2:
-            if random.random() < 0.5: # 50% de chance d'appliquer le drop temporel
+            if random.random() < float(self.cfg.augmentation.temporal_drop_prob): # 50% de chance d'appliquer le drop temporel
                 drop_idx = random.randint(1, len(frames) - 1)
                 frames[drop_idx] = frames[drop_idx - 1]
 
@@ -76,7 +81,14 @@ class VideoTransform:
             crop_i, crop_j, crop_h, crop_w = transforms.RandomResizedCrop.get_params(  
                 frames[0], scale=[0.7, 1.0], ratio=[3 / 4, 4 / 3]
             )
-            do_gray = random.random() < 0.2
+            
+            # CRITICAL: Increase grayscale probability massively (e.g., 80%)
+            # This blinds the model to specific colored objects.
+            do_gray = random.random() < self.cfg.augmentation.grayscale_prob  # 80% de chance de convertir en gris (mais toujours 3 canaux pour la compatibilité) 
+            
+            # CRITICAL: Add Gaussian Blur to destroy sharp background textures
+            do_blur = random.random() < self.cfg.augmentation.blur_prob  # 50% de chance d'appliquer le flou
+            blurer = transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 2.0))
 
         result: List[torch.Tensor] = []
         for img in frames:
@@ -88,6 +100,8 @@ class VideoTransform:
                 )
                 if do_gray:
                     img = TF.rgb_to_grayscale(img, num_output_channels=3)  
+                if do_blur:
+                    img = blurer(img)
                 
                 # Couleur (par frame)
                 img = self.color_jitter(img)
@@ -174,24 +188,36 @@ def split_train_val(
     seed: int,
 ) -> Tuple[List[Tuple[Path, int]], List[Tuple[Path, int]]]:
     """
-    Shuffle then split a list of (video_path, label) into train and validation portions.
-
-    Mirrors a standard random hold-out so train.py and evaluate.py stay consistent.
+    Stratified split of (video_path, label) into train and validation portions.
+    Ensures that every class has the exact same ratio in both sets.
     """
     rng = random.Random(seed)
-    shuffled = list(samples)
-    rng.shuffle(shuffled)
+    
+    # 1. Group samples by class
+    by_class: Dict[int, List[Tuple[Path, int]]] = {}
+    for sample in samples:
+        by_class.setdefault(sample[1], []).append(sample)
 
-    if val_ratio <= 0.0:
-        return shuffled, []
+    train_samples: List[Tuple[Path, int]] = []
+    val_samples: List[Tuple[Path, int]] = []
 
-    n_val = int(round(len(shuffled) * val_ratio))
-    n_val = max(1, n_val) if len(shuffled) > 1 else 0
+    # 2. Split each class individually (Stratification)
+    for cls, cls_samples in by_class.items():
+        rng.shuffle(cls_samples)
+        
+        if val_ratio <= 0.0:
+            train_samples.extend(cls_samples)
+            continue
+            
+        n_val = int(round(len(cls_samples) * val_ratio))
+        # Ensure at least 1 val sample if the class has more than 1 total sample
+        n_val = max(1, n_val) if len(cls_samples) > 1 else 0
 
-    val_samples = shuffled[:n_val]
-    train_samples = shuffled[n_val:]
-    if len(train_samples) == 0:
-        train_samples = val_samples[:-1]
-        val_samples = val_samples[-1:]
+        val_samples.extend(cls_samples[:n_val])
+        train_samples.extend(cls_samples[n_val:])
+
+    # 3. Shuffle the final aggregated lists
+    rng.shuffle(train_samples)
+    rng.shuffle(val_samples)
 
     return train_samples, val_samples

@@ -29,13 +29,17 @@ class CNNLSTM(nn.Module):
         feature_dim = backbone.fc.in_features  # 512
         backbone.fc = nn.Identity()
         self.backbone = backbone
-
+        
         self.lstm = nn.LSTM(
             input_size=feature_dim,
             hidden_size=lstm_hidden_size,
             num_layers=1,
             batch_first=True,
         )
+        if not pretrained:
+            self.dropout = nn.Dropout(p=0.3)  # ADD THIS
+        else:
+            self.dropout = nn.Identity()  # No dropout if pretrained, to preserve learned features
         self.classifier = nn.Linear(lstm_hidden_size, num_classes)
 
     def forward(self, video_batch: torch.Tensor) -> torch.Tensor:
@@ -52,12 +56,15 @@ class CNNLSTM(nn.Module):
 
         # (B, T, 512)
         sequence = frame_features.view(batch_size, num_frames, -1)
-
+        
         # lstm_out: (B, T, hidden), h_n: (1, B, hidden)
         lstm_out, (h_n, _) = self.lstm(sequence)
 
         # Last timestep output: (B, hidden)
         last_hidden = lstm_out[:, -1, :]
+        
+        # Apply dropout to prevent the LSTM from overfitting
+        last_hidden = self.dropout(last_hidden)
 
         logits = self.classifier(last_hidden)
         return logits

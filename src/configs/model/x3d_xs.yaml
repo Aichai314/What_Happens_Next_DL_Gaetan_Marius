@@ -1,0 +1,5 @@
+# @package _global_
+model:
+  name: x3d_xs
+  pretrained: true
+  num_classes: ${num_classes}

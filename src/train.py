@@ -32,6 +32,7 @@ from tqdm import tqdm
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
 from models.cnn_baseline import CNNBaseline
+from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
@@ -39,6 +40,10 @@ from models.convnext_tsm_transformer import ConvNeXtTSMTransformer
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet18 import TSMBaseline
 from models.videomae_v2 import VideoMAEFinetune
+from models.r2plus1d_baseline import R2Plus1DBaseline
+from models.vit_small import ViTSmallTransformer
+from models.trn_baseline import TRN
+from models.x3d_xs import X3DXSBaseline
 from utils import VideoTransform, build_transforms, set_seed, split_train_val
 
 
@@ -108,7 +113,12 @@ def build_model(cfg: DictConfig) -> nn.Module:
     num_frames = cfg.dataset.num_frames
 
     if name == "tsm_baseline":
-        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained)
+        dropout = cfg.model.get("dropout", 0.5)
+        print("Building TSM with dropout, p =", dropout)
+        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained,
+                           dropout=float(dropout), n_div=int(cfg.model.get("fold_div", 8)))
+    if name == "r2plus1d":
+        return R2Plus1DBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_baseline":
         return CNNBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_lstm":
@@ -117,6 +127,18 @@ def build_model(cfg: DictConfig) -> nn.Module:
             num_classes=num_classes,
             pretrained=pretrained,
             lstm_hidden_size=int(hidden),
+        )
+    if name == "cnn_gru":
+        return CNNGRU(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            gru_hidden_size=int(cfg.model.get("gru_hidden_size", 128))
+        )
+    if name == "trn_baseline":
+        return TRN(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            relation_hidden_dim=int(cfg.model.get("relation_hidden_dim", 256))
         )
     if name == "first_cnn":
         dropout = cfg.model.get("dropout", 0.5)
@@ -142,6 +164,8 @@ def build_model(cfg: DictConfig) -> nn.Module:
             fold_div=int(cfg.model.get("fold_div", 8)),
         )
 
+    if name == "x3d_xs":
+        return X3DXSBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "vit_transformer":
         return ViTTransformer(
             num_classes=num_classes,
@@ -149,6 +173,14 @@ def build_model(cfg: DictConfig) -> nn.Module:
             temporal_layers=int(cfg.model.get("temporal_layers", 6)),
             temporal_heads=int(cfg.model.get("temporal_heads", 8)),
             dropout=float(cfg.model.get("dropout", 0.1)),
+        )
+    if name == "vit_small":
+        return ViTSmallTransformer(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            dropout=float(cfg.model.get("dropout", 0.3)),
+            temporal_heads=int(cfg.model.get("temporal_heads", 6)),
+            temporal_layers=int(cfg.model.get("temporal_layers", 4)),
         )
 
     if name == "videomae_v2":
@@ -184,7 +216,23 @@ def train_one_epoch(
 
         # Apply Mixup on the GPU if configured
         if mixup_fn is not None:
+            # 1. Save original shape
+            B, T, C, H, W = video_batch.shape
+            
+            # 2. Collapse Batch and Time: (B, T, C, H, W) -> (B*T, C, H, W)
+            # BUT: Mixup needs to mix videos, not individual frames independently.
+            # So we treat the video as a "thick" image by stacking channels 
+            # OR we apply the same lambda to all frames in a video.
+            
+            # The cleaner way for v2.MixUp with 5D:
+            # Collapse Time into Channels temporarily: (B, T*C, H, W)
+            video_batch = video_batch.view(B, T * C, H, W)
+            
+            # 3. Apply Mixup
             video_batch, mixup_labels = mixup_fn(video_batch, labels)
+            
+            # 4. Restore original 5D shape: (B, T, C, H, W)
+            video_batch = video_batch.view(B, T, C, H, W)
         else:
             mixup_labels = labels
 
@@ -261,25 +309,29 @@ def main(cfg: DictConfig) -> None:
     device = torch.device(device_str)
 
     train_dir = Path(cfg.dataset.train_dir).resolve()
+    val_dir = Path(cfg.dataset.val_dir).resolve()
     all_samples = collect_video_samples(train_dir)
 
     max_samples = cfg.dataset.get("max_samples")
     if max_samples is not None:
         all_samples = all_samples[: int(max_samples)]
+        
+    train_samples = all_samples
+    val_samples = collect_video_samples(val_dir)
 
-    train_samples, val_samples = split_train_val(
-        all_samples,
-        val_ratio=float(cfg.dataset.val_ratio),
-        seed=int(cfg.dataset.seed),
-    )
+    # train_samples, val_samples = split_train_val(
+    #     all_samples,
+    #     val_ratio=float(cfg.dataset.val_ratio),
+    #     seed=int(cfg.dataset.seed),
+    # )
 
     use_imagenet_norm = bool(cfg.model.pretrained)
     use_augmentation = bool(cfg.training.get("augmentation", False))
     if use_augmentation:
-        train_transform = VideoTransform(is_training=True,  use_imagenet_norm=use_imagenet_norm)
+        train_transform = VideoTransform(cfg, is_training=True,  use_imagenet_norm=use_imagenet_norm)
     else:
         train_transform = build_transforms(is_training=True, use_imagenet_norm=use_imagenet_norm)
-    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=use_imagenet_norm)
+    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm)
 
     train_dataset = VideoFrameDataset(
         root_dir=train_dir,
@@ -288,7 +340,7 @@ def main(cfg: DictConfig) -> None:
         sample_list=train_samples,
     )
     val_dataset = VideoFrameDataset(
-        root_dir=train_dir,
+        root_dir=val_dir,
         num_frames=int(cfg.dataset.num_frames),
         transform=eval_transform,
         sample_list=val_samples,
@@ -355,10 +407,40 @@ def main(cfg: DictConfig) -> None:
         scheduler = None
 
     best_val_accuracy = 0.0
+    start_epoch = 0
     checkpoint_path = Path(cfg.training.checkpoint_path).resolve()
+    if cfg.training.get("latest_checkpoint_path"):
+        latest_checkpoint_path = Path(cfg.training.latest_checkpoint_path).resolve()
+    else:
+        latest_checkpoint_path = None
+        
+    if cfg.training.get("resume_from", None):
+        print(f"Resuming training from {cfg.training.resume_from}...")
+        checkpoint = torch.load(cfg.training.resume_from, map_location=device)
+        
+        # 1. Restore Weights
+        model.load_state_dict(checkpoint["model_state_dict"])
+        
+        # 2. Restore Optimizer momentum
+        if checkpoint.get("optimizer_state_dict") is not None:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        
+        # 3. Restore Scheduler state (SAFE CHECK)
+        if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+        # Restore Scaler state (SAFE CHECK)
+        if checkpoint.get("scaler_state_dict") is not None:
+            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        
+        # 4. Fast-forward the timeline
+        start_epoch = checkpoint["epoch"] + 1
+        best_val_accuracy = checkpoint.get("val_accuracy", 0.0)
+        print(f"Successfully restored! Resuming at Epoch {start_epoch} with Best Acc {best_val_accuracy:.4f}")
+
     t_start = time.time()
 
-    epoch_bar = tqdm(range(total_epochs), desc="Epochs", unit="ep")
+    epoch_bar = tqdm(range(start_epoch, total_epochs), desc="Epochs", unit="ep")
     for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
             model, train_loader, loss_fn, optimizer, device, scaler, mixup_fn
@@ -382,26 +464,34 @@ def main(cfg: DictConfig) -> None:
             f"lr {current_lr:.2e}"
         )
 
+        payload: Dict[str, Any] = {
+            "epoch": epoch,                                      # Critical: Where did we stop?
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),      # Critical: AdamW momentum
+            "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+            "scaler_state_dict": scaler.state_dict(),
+            "num_classes": int(cfg.model.num_classes),
+            "pretrained": bool(cfg.model.pretrained),
+            "num_frames": int(cfg.dataset.num_frames),
+            "val_accuracy": val_acc,
+            "config": OmegaConf.to_container(cfg, resolve=True),
+        }
+        if cfg.model.name == "cnn_lstm":
+            payload["lstm_hidden_size"] = int(
+                cfg.model.get("lstm_hidden_size", 512)
+            )
         if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
-            payload: Dict[str, Any] = {
-                "model_state_dict": model.state_dict(),
-                "model_name": cfg.model.name,
-                "num_classes": int(cfg.model.num_classes),
-                "pretrained": bool(cfg.model.pretrained),
-                "num_frames": int(cfg.dataset.num_frames),
-                "val_accuracy": val_acc,
-                "config": OmegaConf.to_container(cfg, resolve=True),
-            }
-            if cfg.model.name == "cnn_lstm":
-                payload["lstm_hidden_size"] = int(
-                    cfg.model.get("lstm_hidden_size", 512)
-                )
-
             torch.save(payload, checkpoint_path)
             print(
                 f"  Saved new best model to {checkpoint_path} (val acc={val_acc:.4f})"
             )
+        if latest_checkpoint_path is not None:
+            torch.save(payload, latest_checkpoint_path)
+            print(
+                f"  Saved latest model to {latest_checkpoint_path} (val acc={val_acc:.4f})"
+            )
+        
 
     print(f"Done. Best validation accuracy: {best_val_accuracy:.4f}")
 

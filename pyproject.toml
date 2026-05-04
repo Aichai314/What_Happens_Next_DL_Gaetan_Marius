@@ -13,8 +13,11 @@ dependencies = [
     "pillow>=10.0.0",
     "tqdm>=4.67.3",
     "gdown>=6.0.0",
-    "matplotlib>=3.7.0",
+    "matplotlib>=3.10.9",
     "transformers>=4.40.0",
+    "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
+    "pytorchvideo>=0.1.5",
 ]
 
 [tool.uv]

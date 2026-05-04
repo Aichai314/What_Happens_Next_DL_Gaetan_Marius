@@ -70,19 +70,25 @@ def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) ->
     return model
 
 class TSMBaseline(nn.Module):
-    def __init__(self, num_classes: int, num_frames: int, pretrained: bool = False) -> None:
+    def __init__(self, num_classes: int, num_frames: int, pretrained: bool = False, dropout: float = 0, n_div: int = 8) -> None:
         super().__init__()
         weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = models.resnet18(weights=weights)
 
         # Inject the Temporal Shift Module into the backbone
-        backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames)
+        backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)
 
         # Replace the original 1000-way ImageNet head with identity
         feature_dim = backbone.fc.in_features  # 512 for ResNet18
         backbone.fc = nn.Identity()
 
         self.backbone = backbone
+        
+        if dropout > 0:
+            self.dropout = nn.Dropout(p=dropout)
+        else:
+            self.dropout = nn.Identity()  # No dropout if dropout=0.0
+        
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, video_batch: torch.Tensor) -> torch.Tensor:
@@ -107,6 +113,8 @@ class TSMBaseline(nn.Module):
         # Simple temporal pooling: average over frames -> (B, 512)
         pooled_features = sequence_features.mean(dim=1)
 
+        # Apply dropout before classification
+        pooled_features = self.dropout(pooled_features)
         # Class scores: (B, num_classes)
         logits = self.classifier(pooled_features)
         return logits
