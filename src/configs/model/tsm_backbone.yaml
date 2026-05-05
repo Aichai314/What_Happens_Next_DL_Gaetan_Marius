@@ -1,7 +1,7 @@
 # @package _global_
 model:
-  name: tsm_baseline
+  name: tsm_backbone
   pretrained: false
   num_classes: ${num_classes}
   dropout: 0.0 # No dropout in the baseline
-  model_size: 18
+  model_size: 34

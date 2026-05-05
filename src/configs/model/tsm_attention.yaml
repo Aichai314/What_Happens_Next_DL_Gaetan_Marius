@@ -1,0 +1,7 @@
+# @package _global_
+model:
+  name: tsm_attention
+  pretrained: false
+  num_classes: ${num_classes}
+  dropout: 0.1 # Some dropout in the attention module to prevent overfitting and keep all heads active
+  attention_dropout: 0.3

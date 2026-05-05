@@ -2,7 +2,7 @@
 # TSM + ResNet18  —  Track A
 # python src/train.py experiment=tsm_6_channels
 defaults:
-  - override /model: tsm_baseline
+  - override /model: tsm_backbone
 
 model:
   pretrained: false
@@ -32,4 +32,4 @@ dataset:
 augmentation:
   temporal_drop_prob: 0.1
   grayscale_prob: 0.5
-  blur_prob: 0.2
+  blur_prob: 0.3

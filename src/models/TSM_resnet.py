@@ -77,11 +77,18 @@ class TSMBaseline(nn.Module):
         pretrained: bool = False, 
         dropout: float = 0, 
         n_div: int = 8,
-        in_channels: int = 3
+        in_channels: int = 3,
+        size: int = 18
     ) -> None:
         super().__init__()
-        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
-        backbone = models.resnet18(weights=weights)
+        if size == 18:
+            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet18(weights=weights)
+        elif size == 34:
+            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet34(weights=weights)
+        else:
+            raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
 
         # =========================================================
         # THE 6-CHANNEL SURGERY (Must happen before TSM injection)
