@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import VideoMAEForVideoClassification, VideoMAEConfig
 
 
@@ -31,6 +32,7 @@ class VideoMAELargeKineticsFinetune(nn.Module):
         num_classes: int,
         pretrained: bool = True,
         llrd: float = 0.75,
+        num_frames: int = 16,
     ) -> None:
         super().__init__()
         self.llrd = llrd
@@ -45,6 +47,7 @@ class VideoMAELargeKineticsFinetune(nn.Module):
             config.num_labels = num_classes
             self.model = VideoMAEForVideoClassification(config)
 
+        self._interpolate_position_embeddings(num_frames)
         self.model.gradient_checkpointing_enable()
 
         hidden_size = self.model.config.hidden_size  # 1024 for large
@@ -67,6 +70,27 @@ class VideoMAELargeKineticsFinetune(nn.Module):
             nn.Dropout(0.3),
             fc3,
         )
+
+    def _interpolate_position_embeddings(self, num_frames: int) -> None:
+        cfg = self.model.config
+        tubelet_size = cfg.tubelet_size        # 2
+        patch_size = cfg.patch_size            # 16
+        image_size = cfg.image_size            # 224
+
+        h = w = image_size // patch_size       # 14
+        t_target = num_frames // tubelet_size  # e.g. 2 for T=4
+
+        pe = self.model.videomae.embeddings.position_embeddings  # [1, T_pre*H*W, D]
+        t_pre = pe.shape[1] // (h * w)        # e.g. 8 for T=16
+
+        if t_pre == t_target:
+            return
+
+        d = pe.shape[-1]
+        data = pe.data.reshape(1, t_pre, h, w, d).permute(0, 4, 1, 2, 3).float()  # [1, D, T, H, W]
+        data = F.interpolate(data, size=(t_target, h, w), mode="trilinear", align_corners=False)
+        data = data.permute(0, 2, 3, 4, 1).reshape(1, t_target * h * w, d)
+        self.model.videomae.embeddings.position_embeddings = nn.Parameter(data)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # VideoMAE expects (B, T, C, H, W)

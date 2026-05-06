@@ -197,6 +197,7 @@ def build_model(cfg: DictConfig) -> nn.Module:
             num_classes=num_classes,
             pretrained=pretrained,
             llrd=float(cfg.model.get("llrd", 0.75)),
+            num_frames=num_frames,
         )
 
     raise ValueError(f"Unknown model.name: {name}")
@@ -210,6 +211,7 @@ def train_one_epoch(
     device: torch.device,
     scaler: torch.cuda.amp.GradScaler,
     mixup_fn: Optional[v2.MixUp] = None,
+    accumulation_steps: int = 1,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
