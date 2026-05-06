@@ -1,0 +1,37 @@
+# @package _global_
+# ResNet34 backbone + Attention head  —  Track A
+# python src/train.py experiment=lstm_stage2
+defaults:
+  - override /model: cnn_lstm
+
+model:
+  pretrained: false
+  fold_div: 8
+  in_channels: 6
+  lstm_hidden_size: 1024
+  backbone_size: 34
+  freeze_backbone: false
+  pursue_from: ${hydra:runtime.cwd}/lstm_stage1_best.pt
+
+training:
+  augmentation: true
+  mixup_alpha: 0.4
+  epochs: 15                # 15 final epochs of joint fine-tuning
+  batch_size: 128
+  lr: 5e-5                  # Tiny LR to prevent gradient shock
+  optimizer: adamw
+  weight_decay: 1e-1        # Re-apply heavy regularization
+  scheduler: warmup_cosine
+  warmup_epochs: 2
+  label_smoothing: 0.2
+  backbone_size: 34
+  checkpoint_path: ${hydra:runtime.cwd}/lstm_stage2_best.pt
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.7
+  blur_prob: 0.5
+
+dataset:
+  num_frames: 4
+  use_frame_differencing: true

@@ -21,9 +21,9 @@ training:
   scheduler: warmup_cosine
   warmup_epochs: 4
   label_smoothing: 0.2
-  checkpoint_path: ${hydra:runtime.cwd}/best_model_tsm.pt
-  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_tsm.pt
-  # resume_from: ${hydra:runtime.cwd}/latest_model_tsm.pt
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_backbone.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_backbone.pt
+  # resume_from: ${hydra:runtime.cwd}/latest_model_backbone.pt
 
 dataset:
   num_frames: 4

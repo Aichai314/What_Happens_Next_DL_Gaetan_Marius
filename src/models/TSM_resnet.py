@@ -22,65 +22,23 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torchvision import models
-
-class TemporalShift(nn.Module):
-    def __init__(self, net: nn.Module, num_frames: int, n_div: int = 8) -> None:
-        super().__init__()
-        self.net = net
-        self.num_frames = num_frames
-        self.fold_div = n_div
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.shift(x, self.num_frames, fold_div=self.fold_div)
-        return self.net(x)
-
-    @staticmethod
-    def shift(x: torch.Tensor, num_frames: int, fold_div: int = 8) -> torch.Tensor:
-        # x shape: (B*T, C, H, W)
-        bt, c, h, w = x.size()
-        batch_size = bt // num_frames
-        
-        # Reshape to explicitly expose the temporal dimension
-        x = x.view(batch_size, num_frames, c, h, w)
-
-        out = torch.zeros_like(x)
-        fold = c // fold_div
-
-        # Shift left (past frames)
-        out[:, :-1, :fold] = x[:, 1:, :fold]
-        
-        # Shift right (future frames)
-        out[:, 1:, fold: 2 * fold] = x[:, :-1, fold: 2 * fold]
-        
-        # Keep the rest of the channels intact
-        out[:, :, 2 * fold:] = x[:, :, 2 * fold:]
-
-        # Flatten back to (B*T, C, H, W) for the 2D CNN
-        return out.view(bt, c, h, w)
-
-def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) -> nn.Module:
-    """
-    Iterates through a torchvision ResNet and wraps the first convolution 
-    of each BasicBlock with the TemporalShift operation.
-    """
-    for name, module in model.named_modules():
-        if isinstance(module, models.resnet.BasicBlock):
-            # Wrap conv1 in the BasicBlock
-            module.conv1 = TemporalShift(module.conv1, num_frames=num_frames, n_div=n_div)
-    return model
+from omegaconf import DictConfig
+from utils import inject_tsm_into_resnet, replace_resnet_stem
 
 class TSMBaseline(nn.Module):
     def __init__(
-        self, 
+        self,
+        model_cfg: DictConfig,
         num_classes: int, 
         num_frames: int, 
-        pretrained: bool = False, 
-        dropout: float = 0, 
-        n_div: int = 8,
-        in_channels: int = 3,
-        size: int = 18
+        pretrained: bool = False,
     ) -> None:
         super().__init__()
+        size = model_cfg.get("model_size", 18)
+        in_channels = model_cfg.get("in_channels", 3)
+        n_div = model_cfg.get("fold_div", 8)
+        dropout = model_cfg.get("dropout", 0.0)
+        
         if size == 18:
             weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
             backbone = models.resnet18(weights=weights)
@@ -90,28 +48,7 @@ class TSMBaseline(nn.Module):
         else:
             raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
 
-        # =========================================================
-        # THE 6-CHANNEL SURGERY (Must happen before TSM injection)
-        # =========================================================
-        if in_channels != 3:
-            old_conv = backbone.conv1
-            # Create a new Conv2d with dynamically sized input channels
-            backbone.conv1 = nn.Conv2d(
-                in_channels, 
-                old_conv.out_channels,
-                kernel_size=old_conv.kernel_size,
-                stride=old_conv.stride,
-                padding=old_conv.padding,
-                bias=False
-            )
-            
-            # The Pretraining Preservation Trick
-            if pretrained:
-                with torch.no_grad():
-                    # Copy the original ImageNet RGB weights into the first 3 channels
-                    backbone.conv1.weight[:, :3] = old_conv.weight
-                    # Initialize the new "Difference" channels to zero.
-                    backbone.conv1.weight[:, 3:] = 0.0
+        backbone = replace_resnet_stem(backbone, in_channels=in_channels)
 
         # Inject the Temporal Shift Module into the backbone
         backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)

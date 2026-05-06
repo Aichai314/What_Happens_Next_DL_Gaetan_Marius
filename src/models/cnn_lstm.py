@@ -11,22 +11,43 @@ Forward:
 
 from __future__ import annotations
 
+from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 from torchvision import models
+from utils import two_stage_trainer, inject_tsm_into_resnet, replace_resnet_stem
 
-
+@two_stage_trainer
 class CNNLSTM(nn.Module):
     def __init__(
         self,
+        model_cfg: DictConfig,
         num_classes: int,
+        num_frames: int, 
         pretrained: bool = False,
-        lstm_hidden_size: int = 512,
     ) -> None:
         super().__init__()
-        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
-        backbone = models.resnet18(weights=weights)
-        feature_dim = backbone.fc.in_features  # 512
+        lstm_hidden_size = int(model_cfg.get("lstm_hidden_size", 512))
+        in_channels = int(model_cfg.get("in_channels", 3))
+        size = int(model_cfg.get("backbone_size", 18))
+        n_div = int(model_cfg.get("fold_div", 8))
+
+        if size == 18:
+            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet18(weights=weights)
+        elif size == 34:
+            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet34(weights=weights)
+        else:
+            raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
+
+        backbone = replace_resnet_stem(backbone, in_channels=in_channels)
+
+        if model_cfg.get("pretrained_backbone_path") is not None or model_cfg.get("pursue_from") is not None:
+            # Inject TSM
+            backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)
+        
+        feature_dim = backbone.fc.in_features 
         backbone.fc = nn.Identity()
         self.backbone = backbone
         

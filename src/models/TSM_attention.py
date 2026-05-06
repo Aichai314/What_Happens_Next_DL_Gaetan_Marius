@@ -8,38 +8,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torchvision import models
-
-class TemporalShift(nn.Module):
-    def __init__(self, net: nn.Module, num_frames: int, n_div: int = 8) -> None:
-        super().__init__()
-        self.net = net
-        self.num_frames = num_frames
-        self.fold_div = n_div
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.shift(x, self.num_frames, fold_div=self.fold_div)
-        return self.net(x)
-
-    @staticmethod
-    def shift(x: torch.Tensor, num_frames: int, fold_div: int = 8) -> torch.Tensor:
-        bt, c, h, w = x.size()
-        batch_size = bt // num_frames
-        
-        x = x.view(batch_size, num_frames, c, h, w)
-        out = torch.zeros_like(x)
-        fold = c // fold_div
-
-        out[:, :-1, :fold] = x[:, 1:, :fold]
-        out[:, 1:, fold: 2 * fold] = x[:, :-1, fold: 2 * fold]
-        out[:, :, 2 * fold:] = x[:, :, 2 * fold:]
-
-        return out.view(bt, c, h, w)
-
-def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) -> nn.Module:
-    for name, module in model.named_modules():
-        if isinstance(module, models.resnet.BasicBlock):
-            module.conv1 = TemporalShift(module.conv1, num_frames=num_frames, n_div=n_div)
-    return model
+from omegaconf import DictConfig
+from utils import two_stage_trainer, inject_tsm_into_resnet, replace_resnet_stem
 
 # =========================================================
 # THE NEW TEMPORAL ATTENTION HEAD
@@ -81,32 +51,33 @@ class TemporalSelfAttention(nn.Module):
         # Instead of returning all T frames, we now pool the *attended* features
         return x.mean(dim=1)
 
+@two_stage_trainer
 class TSMAttention(nn.Module):
     def __init__(
-        self, 
+        self,
+        model_cfg: DictConfig,
         num_classes: int, 
         num_frames: int, 
-        pretrained: bool = False, 
-        dropout: float = 0, 
-        n_div: int = 8,
-        in_channels: int = 3,
-        attention_dropout: float = 0.3
+        pretrained: bool = False
     ) -> None:
         super().__init__()
-        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
-        backbone = models.resnet18(weights=weights)
+        dropout = float(model_cfg.get("dropout", 0))
+        n_div = int(model_cfg.get("fold_div", 8))
+        in_channels = int(model_cfg.get("in_channels", 3))
+        attention_dropout = float(model_cfg.get("attention_dropout", 0.3))
+        size = int(model_cfg.get("backbone_size", 18))
 
-        # 6-Channel Surgery
-        if in_channels != 3:
-            old_conv = backbone.conv1
-            backbone.conv1 = nn.Conv2d(
-                in_channels, old_conv.out_channels, kernel_size=old_conv.kernel_size,
-                stride=old_conv.stride, padding=old_conv.padding, bias=False
-            )
-            if pretrained:
-                with torch.no_grad():
-                    backbone.conv1.weight[:, :3] = old_conv.weight
-                    backbone.conv1.weight[:, 3:] = 0.0
+        if size == 18:
+            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet18(weights=weights)
+        elif size == 34:
+            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet34(weights=weights)
+        else:
+            raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
+
+        # Replace the ResNet stem
+        backbone = replace_resnet_stem(backbone, in_channels=in_channels)
 
         # Inject TSM
         backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)

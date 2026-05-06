@@ -11,9 +11,67 @@ from typing import List, Tuple, Dict
 import numpy as np
 from omegaconf import DictConfig
 import torch
+import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
+from torchvision import models
 from PIL import Image
+from functools import wraps
+
+def two_stage_trainer(cls):
+    """
+    A class decorator that wraps the __init__ of any model.
+    Handles Stage 1 (Backbone Grafting & Freezing) and Stage 2 (Full Resume & Fine-Tuning).
+    """
+    original_init = cls.__init__
+
+    @wraps(original_init)
+    def new_init(self, model_cfg, *args, **kwargs):
+        # 1. Run standard __init__ FIRST to build the complete architecture
+        original_init(self, model_cfg, *args, **kwargs)
+
+        # Retrieve paths from Hydra config
+        pursue_path = model_cfg.get("pursue_from", None)
+        backbone_path = model_cfg.get("pretrained_backbone_path", None)
+
+        # =================================================================
+        # STAGE 2: FULL MODEL RESUME (Backbone + Head)
+        # =================================================================
+        if pursue_path:
+            print(f"--> [Wrapper] STAGE 2: Loading FULL model weights from: {pursue_path}")
+            checkpoint = torch.load(pursue_path, map_location="cpu")
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            
+            # Load the entire network (self) rather than just self.backbone
+            self.load_state_dict(state_dict, strict=False)
+
+        # =================================================================
+        # STAGE 1: BACKBONE GRAFTING (Ignore Head)
+        # =================================================================
+        elif backbone_path:
+            print(f"--> [Wrapper] STAGE 1: Loading strictly backbone from: {backbone_path}")
+            checkpoint = torch.load(backbone_path, map_location="cpu")
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            
+            # Extract ONLY the backbone weights
+            backbone_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items() if 'backbone' in k}
+            self.backbone.load_state_dict(backbone_dict, strict=False)
+
+        # =================================================================
+        # FREEZING LOGIC (Independent of Loading)
+        # =================================================================
+        if model_cfg.get("freeze_backbone", False):
+            print("--> [Wrapper] LOCKING Backbone parameters (Gradients OFF).")
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+        else:
+            print("--> [Wrapper] Backbone is UNFROZEN (Gradients ON). Training all layers.")
+            for param in self.backbone.parameters():
+                param.requires_grad = True
+
+    # Replace the __init__
+    cls.__init__ = new_init
+    return cls
 
 
 def set_seed(seed: int) -> None:
@@ -239,3 +297,81 @@ def split_train_val(
     rng.shuffle(val_samples)
 
     return train_samples, val_samples
+
+class TemporalShift(nn.Module):
+    def __init__(self, net: nn.Module, num_frames: int, n_div: int = 8) -> None:
+        super().__init__()
+        self.net = net
+        self.num_frames = num_frames
+        self.fold_div = n_div
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.shift(x, self.num_frames, fold_div=self.fold_div)
+        return self.net(x)
+
+    @staticmethod
+    def shift(x: torch.Tensor, num_frames: int, fold_div: int = 8) -> torch.Tensor:
+        # x shape: (B*T, C, H, W)
+        bt, c, h, w = x.size()
+        batch_size = bt // num_frames
+        
+        # Reshape to explicitly expose the temporal dimension
+        x = x.view(batch_size, num_frames, c, h, w)
+
+        out = torch.zeros_like(x)
+        fold = c // fold_div
+
+        # Shift left (past frames)
+        out[:, :-1, :fold] = x[:, 1:, :fold]
+        
+        # Shift right (future frames)
+        out[:, 1:, fold: 2 * fold] = x[:, :-1, fold: 2 * fold]
+        
+        # Keep the rest of the channels intact
+        out[:, :, 2 * fold:] = x[:, :, 2 * fold:]
+
+        # Flatten back to (B*T, C, H, W) for the 2D CNN
+        return out.view(bt, c, h, w)
+
+def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) -> nn.Module:
+    """
+    Iterates through a torchvision ResNet and wraps the first convolution 
+    of each BasicBlock with the TemporalShift operation.
+    """
+    for name, module in model.named_modules():
+        if isinstance(module, models.resnet.BasicBlock):
+            # Wrap conv1 in the BasicBlock
+            module.conv1 = TemporalShift(module.conv1, num_frames=num_frames, n_div=n_div)
+    return model
+
+def replace_resnet_stem(backbone: nn.Module, in_channels: int = 3) -> nn.Module:
+    """
+    Replaces the standard ResNet 7x7 stride-2 convolution with three 3x3 convolutions.
+    This preserves spatial data much better early in the network.
+    Automatically handles custom input channels (e.g., 6 for Early Fusion).
+    """
+    out_channels = backbone.conv1.out_channels # Usually 64
+    mid_channels = out_channels // 2           # Usually 32
+
+    # Create the new high-resolution stem
+    new_stem = nn.Sequential(
+        # 1st 3x3 Conv: Stride 2 (Handles the initial downsampling)
+        nn.Conv2d(in_channels, mid_channels, kernel_size=3, stride=2, padding=1, bias=False),
+        nn.BatchNorm2d(mid_channels),
+        nn.ReLU(inplace=True),
+        
+        # 2nd 3x3 Conv: Stride 1 (Processes spatial patterns without shrinking)
+        nn.Conv2d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
+        nn.BatchNorm2d(mid_channels),
+        nn.ReLU(inplace=True),
+        
+        # 3rd 3x3 Conv: Stride 1 (Projects to 64 channels to match original ResNet design)
+        nn.Conv2d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+    )
+
+    # Replace the massive 7x7 convolution
+    backbone.conv1 = new_stem
+    
+    # NOTE: We do NOT replace backbone.bn1, backbone.relu, or backbone.maxpool.
+    # The output of new_stem flows perfectly into the original bn1.
+    return backbone

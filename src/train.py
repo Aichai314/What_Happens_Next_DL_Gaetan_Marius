@@ -99,25 +99,19 @@ def build_model(cfg: DictConfig) -> nn.Module:
         dropout = cfg.model.get("dropout", 0.5)
         print("Building TSM with dropout, p =", dropout)
         return TSMBaseline(
+            model_cfg = cfg.model,
             num_classes=num_classes,
             num_frames=num_frames,
             pretrained=pretrained,
-            dropout=float(dropout),
-            n_div=int(cfg.model.get("fold_div", 8)),
-            in_channels=int(cfg.model.get("in_channels", 3)),
-            size=int(cfg.model.get("model_size", 18))
         )
     if name == "tsm_attention":
         dropout = cfg.model.get("dropout", 0.1)
         print("Building TSM with Attention and dropout, p =", dropout)
         return TSMAttention(
+            model_cfg = cfg.model,
             num_classes=num_classes,
             num_frames=num_frames,
-            pretrained=pretrained,
-            dropout=float(dropout),
-            n_div=int(cfg.model.get("fold_div", 8)),
-            in_channels=int(cfg.model.get("in_channels", 3)),
-            attention_dropout=float(cfg.model.get("attention_dropout", 0.3))
+            pretrained=pretrained
         )
     if name == "r2plus1d":
         return R2Plus1DBaseline(num_classes=num_classes, pretrained=pretrained)
@@ -126,9 +120,10 @@ def build_model(cfg: DictConfig) -> nn.Module:
     if name == "cnn_lstm":
         hidden = cfg.model.get("lstm_hidden_size", 512)
         return CNNLSTM(
+            model_cfg = cfg.model,
             num_classes=num_classes,
+            num_frames=num_frames,
             pretrained=pretrained,
-            lstm_hidden_size=int(hidden),
         )
     if name == "cnn_gru":
         return CNNGRU(
@@ -138,9 +133,10 @@ def build_model(cfg: DictConfig) -> nn.Module:
         )
     if name == "trn_baseline":
         return TRN(
+            model_cfg = cfg.model,
             num_classes=num_classes,
+            num_frames=num_frames,
             pretrained=pretrained,
-            relation_hidden_dim=int(cfg.model.get("relation_hidden_dim", 256))
         )
     if name == "first_cnn":
         dropout = cfg.model.get("dropout", 0.5)

@@ -1,0 +1,37 @@
+# @package _global_
+# ResNet34 backbone + Attention head  —  Track A
+# python src/train.py experiment=trn_stage1
+defaults:
+  - override /model: trn_baseline
+
+model:
+  pretrained: false
+  relation_hidden_dim: 1024
+  fold_div: 8
+  in_channels: 6
+  backbone_size: 34
+  pretrained_backbone_path: ${hydra:runtime.cwd}/best_model_backbone_37-03.pt
+  freeze_backbone: true
+
+training:
+  augmentation: true
+  mixup_alpha: 0.4
+  epochs: 15                # Only need 15 epochs to warm up the head
+  batch_size: 128
+  lr: 1e-3                  # High LR to train the blank head quickly
+  optimizer: adamw
+  weight_decay: 1e-2        # Lighter weight decay for just the head
+  scheduler: warmup_cosine
+  warmup_epochs: 2
+  label_smoothing: 0.15
+  backbone_size: 34
+  checkpoint_path: ${hydra:runtime.cwd}/trn_stage1_best.pt
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.5
+  blur_prob: 0.3
+
+dataset:
+  num_frames: 4
+  use_frame_differencing: true

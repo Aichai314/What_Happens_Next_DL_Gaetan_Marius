@@ -6,9 +6,11 @@ Highly optimized for exactly 4 frames.
 
 from __future__ import annotations
 
+from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 from torchvision import models
+from utils import two_stage_trainer, inject_tsm_into_resnet, replace_resnet_stem
 
 
 class RelationModule(nn.Module):
@@ -26,21 +28,39 @@ class RelationModule(nn.Module):
         out = self.dropout(out)
         return self.fc2(out)
 
-
+@two_stage_trainer
 class TRN(nn.Module):
     def __init__(
         self,
+        model_cfg: DictConfig,
         num_classes: int,
+        num_frames: int,
         pretrained: bool = False,
-        feature_dim: int = 512,
-        relation_hidden_dim: int = 256,
     ) -> None:
         super().__init__()
+        relation_hidden_dim = int(model_cfg.get("relation_hidden_dim", 256))
+        in_channels = int(model_cfg.get("in_channels", 3))
+        size = int(model_cfg.get("backbone_size", 18))
+        n_div = int(model_cfg.get("fold_div", 8))
+
+        if size == 18:
+            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet18(weights=weights)
+        elif size == 34:
+            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet34(weights=weights)
+        else:
+            raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
+
+        backbone = replace_resnet_stem(backbone, in_channels=in_channels)
+
+        if model_cfg.get("pretrained_backbone_path") is not None or model_cfg.get("pursue_from") is not None:
+            # Inject TSM
+            backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)
         
-        # 1. Spatial Backbone
-        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
-        self.backbone = models.resnet18(weights=weights)
-        self.backbone.fc = nn.Identity()
+        feature_dim = backbone.fc.in_features 
+        backbone.fc = nn.Identity()
+        self.backbone = backbone
 
         # 2. The Relation Modules (Multi-Scale)
         # We create a separate "brain" for 2-frame, 3-frame, and 4-frame comparisons
