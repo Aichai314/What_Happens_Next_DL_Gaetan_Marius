@@ -1,0 +1,23 @@
+# @package _global_
+# VideoMAE Large fine-tuned on Kinetics-400, adapted for 33 classes.
+# python src/train.py experiment=videomae_large_kinetics
+defaults:
+  - override /model: videomae_large_kinetics
+
+training:
+  epochs: 30
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  lr: 0.0001
+  backbone_lr_factor: 0.05
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: warmup_cosine
+  warmup_epochs: 3
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.2
+
+dataset:
+  num_frames: 16

@@ -1,12 +1,15 @@
 """
-VideoMAE fine-tuned on Something-Something v2, adapted for 33-class prediction.
+VideoMAE-Large fine-tuned on Kinetics-400, adapted for 33-class prediction.
 
-Loads MCG-NJU/videomae-base-finetuned-ssv2 from HuggingFace, replaces the
-174-class SSv2 head with a 33-class head, and uses Layer-wise LR Decay (LLRD)
-so lower transformer blocks stay close to their pretrained weights.
+Loads MCG-NJU/videomae-large-finetuned-kinetics from HuggingFace, replaces the
+400-class Kinetics head with a 33-class MLP head, and uses Layer-wise LR Decay (LLRD).
 
-LLRD: block[11] (top) → backbone_lr, block[0] (bottom) → backbone_lr × llrd^11,
-      embeddings → backbone_lr × llrd^12.
+Architecture: ViT-Large (307M params, hidden_size=1024, 24 transformer blocks).
+Kinetics pretraining is less close to SSv2 than SSv2 pretraining, so the backbone
+LR factor can be slightly higher to allow more adaptation.
+
+LLRD: block[23] (top) → backbone_lr, block[0] (bottom) → backbone_lr × llrd^23,
+      embeddings → backbone_lr × llrd^24.
 
 Input shape  : (B, T, C, H, W)   — T=16 to match pretrained positional embeddings
 Output shape : (B, num_classes)
@@ -19,9 +22,9 @@ import torch.nn as nn
 from transformers import VideoMAEForVideoClassification, VideoMAEConfig
 
 
-class VideoMAEFinetune(nn.Module):
+class VideoMAELargeKineticsFinetune(nn.Module):
 
-    HF_MODEL_ID = "MCG-NJU/videomae-base-finetuned-ssv2"
+    HF_MODEL_ID = "MCG-NJU/videomae-large-finetuned-kinetics"
 
     def __init__(
         self,
@@ -38,25 +41,35 @@ class VideoMAEFinetune(nn.Module):
                 ignore_mismatched_sizes=True,
             )
         else:
-            # Use local cache only — avoids any network call when we'll load a checkpoint anyway
             config = VideoMAEConfig.from_pretrained(self.HF_MODEL_ID, local_files_only=True)
             config.num_labels = num_classes
             self.model = VideoMAEForVideoClassification(config)
 
-        hidden_size = self.model.config.hidden_size  # 768 for base
+        self.model.gradient_checkpointing_enable()
 
-        # Bypass HF classifier (constrained to Linear|Identity) with our own MLP head
+        hidden_size = self.model.config.hidden_size  # 1024 for large
+
+        # Deeper MLP head: Kinetics features need more remapping to SSv2 semantics
         self.model.classifier = nn.Identity()
         fc1 = nn.Linear(hidden_size, hidden_size)
-        fc2 = nn.Linear(hidden_size, num_classes)
-        nn.init.trunc_normal_(fc1.weight, std=0.02)
-        nn.init.zeros_(fc1.bias)
-        nn.init.trunc_normal_(fc2.weight, std=0.02)
-        nn.init.zeros_(fc2.bias)
-        self.head = nn.Sequential(fc1, nn.GELU(), nn.Dropout(0.5), fc2)
+        fc2 = nn.Linear(hidden_size, hidden_size // 2)
+        fc3 = nn.Linear(hidden_size // 2, num_classes)
+        for fc in (fc1, fc2, fc3):
+            nn.init.trunc_normal_(fc.weight, std=0.02)
+            nn.init.zeros_(fc.bias)
+        self.head = nn.Sequential(
+            fc1,
+            nn.LayerNorm(hidden_size),
+            nn.GELU(),
+            nn.Dropout(0.5),
+            fc2,
+            nn.GELU(),
+            nn.Dropout(0.3),
+            fc3,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # VideoMAE expects (B, T, C, H, W) — same as dataset output, no permute needed
+        # VideoMAE expects (B, T, C, H, W)
         return self.head(self.model(pixel_values=x).logits)
 
     def get_param_groups(self, base_lr: float, backbone_lr_factor: float = 0.1):
@@ -71,7 +84,7 @@ class VideoMAEFinetune(nn.Module):
 
         # --- Transformer blocks: LLRD from top (high LR) to bottom (low LR) ---
         encoder_layers = self.model.videomae.encoder.layer
-        num_layers = len(encoder_layers)  # 12 for ViT-Base
+        num_layers = len(encoder_layers)  # 24 for ViT-Large
         for depth, layer in enumerate(reversed(encoder_layers)):
             lr = backbone_base_lr * (self.llrd ** depth)
             groups.append({"params": list(layer.parameters()), "lr": lr})

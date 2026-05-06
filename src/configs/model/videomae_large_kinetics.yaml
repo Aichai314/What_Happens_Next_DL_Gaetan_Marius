@@ -1,0 +1,6 @@
+# @package _global_
+model:
+  name: videomae_large_kinetics
+  num_classes: 33
+  pretrained: true
+  llrd: 0.85

@@ -38,3 +38,4 @@ timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lst
 2026-05-02 21:32:55,104.7,cnn_lstm,False,33,,,,512,,40,128,0.001,adamw,warmup_cosine,4,0.2,42,0.3033,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_lstm.pt
 2026-05-02 23:49:41,74.2,cnn_gru,False,33,,,,,,40,128,0.001,adamw,warmup_cosine,4,0.2,42,0.2976,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_cnn_gru.pt
 2026-05-03 01:24:57,166.2,r2plus1d,False,33,,,,,,50,48,0.001,adamw,warmup_cosine,4,0.2,42,0.3093,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_R2Plus1D.pt
+2026-05-05 03:20:59,677.4,videomae_v2,True,33,,,,,,30,16,0.0001,adamw,warmup_cosine,16,0.2,42,0.5782,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/best_model_videomae.pt

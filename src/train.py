@@ -40,6 +40,7 @@ from models.convnext_tsm_transformer import ConvNeXtTSMTransformer
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet18 import TSMBaseline
 from models.videomae_v2 import VideoMAEFinetune
+from models.videomae_large_kinetics import VideoMAELargeKineticsFinetune
 from models.r2plus1d_baseline import R2Plus1DBaseline
 from models.vit_small import ViTSmallTransformer
 from models.trn_baseline import TRN
@@ -190,6 +191,13 @@ def build_model(cfg: DictConfig) -> nn.Module:
             llrd=float(cfg.model.get("llrd", 0.75)),
         )
 
+    if name == "videomae_large_kinetics":
+        return VideoMAELargeKineticsFinetune(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            llrd=float(cfg.model.get("llrd", 0.75)),
+        )
+
     raise ValueError(f"Unknown model.name: {name}")
 
 
@@ -201,6 +209,7 @@ def train_one_epoch(
     device: torch.device,
     scaler: torch.cuda.amp.GradScaler,
     mixup_fn: Optional[VideoMixUp] = None,
+    accumulation_steps: int = 1,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
@@ -210,51 +219,39 @@ def train_one_epoch(
     use_amp = device.type == "cuda"
 
     pbar = tqdm(data_loader, desc="Train", leave=False)
-    for video_batch, labels in pbar:
+    optimizer.zero_grad()
+    for step, (video_batch, labels) in enumerate(pbar):
         video_batch = video_batch.to(device)
         labels = labels.to(device)
 
         # Apply Mixup on the GPU if configured
         if mixup_fn is not None:
-            # 1. Save original shape
             B, T, C, H, W = video_batch.shape
-            
-            # 2. Collapse Batch and Time: (B, T, C, H, W) -> (B*T, C, H, W)
-            # BUT: Mixup needs to mix videos, not individual frames independently.
-            # So we treat the video as a "thick" image by stacking channels 
-            # OR we apply the same lambda to all frames in a video.
-            
-            # The cleaner way for v2.MixUp with 5D:
-            # Collapse Time into Channels temporarily: (B, T*C, H, W)
             video_batch = video_batch.view(B, T * C, H, W)
-            
-            # 3. Apply Mixup
             video_batch, mixup_labels = mixup_fn(video_batch, labels)
-            
-            # 4. Restore original 5D shape: (B, T, C, H, W)
             video_batch = video_batch.view(B, T, C, H, W)
         else:
             mixup_labels = labels
 
-        optimizer.zero_grad()
-        with torch.amp.autocast("cuda",enabled=use_amp):
+        with torch.amp.autocast("cuda", enabled=use_amp):
             logits = model(video_batch)
-            loss = loss_fn(logits, mixup_labels)
-            
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+            loss = loss_fn(logits, mixup_labels) / accumulation_steps
 
-        running_loss += float(loss.item()) * labels.size(0)
+        scaler.scale(loss).backward()
+
+        if (step + 1) % accumulation_steps == 0 or (step + 1) == len(data_loader):
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+
+        running_loss += float(loss.item()) * accumulation_steps * labels.size(0)
         predictions = logits.argmax(dim=1)
-        
-        # If Mixup is used, labels are probabilities (B, C). 
-        # For training accuracy estimation, we compare against the dominant class.
+
         if mixup_fn is not None:
             target_labels = mixup_labels.argmax(dim=1)
         else:
             target_labels = labels
-            
+
         correct += int((predictions == target_labels).sum().item())
         total += labels.size(0)
         pbar.set_postfix(loss=f"{running_loss / max(total, 1):.4f}", acc=f"{correct / max(total, 1):.4f}")
@@ -440,10 +437,13 @@ def main(cfg: DictConfig) -> None:
 
     t_start = time.time()
 
+    accumulation_steps = int(cfg.training.get("gradient_accumulation_steps", 1))
+
     epoch_bar = tqdm(range(start_epoch, total_epochs), desc="Epochs", unit="ep")
     for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, loss_fn, optimizer, device, scaler, mixup_fn
+            model, train_loader, loss_fn, optimizer, device, scaler, mixup_fn,
+            accumulation_steps=accumulation_steps,
         )
         val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
 
