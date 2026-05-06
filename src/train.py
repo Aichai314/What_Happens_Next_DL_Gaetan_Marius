@@ -25,12 +25,14 @@ from typing import Any, Dict, Tuple, Optional
 import hydra
 import torch
 import torch.nn as nn
+from torchvision.transforms import v2
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from tqdm import tqdm
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
+from models.TSM_attention import TSMAttention
 from models.cnn_baseline import CNNBaseline
 from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
@@ -38,7 +40,7 @@ from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
 from models.convnext_tsm_transformer import ConvNeXtTSMTransformer
 from models.vit_transformer import ViTTransformer
-from models.TSM_resnet18 import TSMBaseline
+from models.TSM_resnet import TSMBaseline
 from models.videomae_v2 import VideoMAEFinetune
 from models.videomae_large_kinetics import VideoMAELargeKineticsFinetune
 from models.r2plus1d_baseline import R2Plus1DBaseline
@@ -86,26 +88,6 @@ def log_run(cfg: DictConfig, best_val_accuracy: float, duration_s: float, result
 
     print(f"  Run logged to {results_path}")
 
-
-class VideoMixUp:
-    """MixUp for 5-D video tensors (B, T, C, H, W)."""
-
-    def __init__(self, alpha: float, num_classes: int) -> None:
-        self.alpha = alpha
-        self.num_classes = num_classes
-
-    def __call__(
-        self, x: torch.Tensor, labels: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        lam = float(torch.distributions.Beta(self.alpha, self.alpha).sample())
-        idx = torch.randperm(x.size(0), device=x.device)
-        mixed_x = lam * x + (1 - lam) * x[idx]
-        y = torch.zeros(x.size(0), self.num_classes, device=labels.device)
-        y.scatter_(1, labels.unsqueeze(1), 1)
-        mixed_labels = lam * y + (1 - lam) * y[idx]
-        return mixed_x, mixed_labels
-
-
 def build_model(cfg: DictConfig) -> nn.Module:
     """Create the model described by cfg.model.name."""
     name = cfg.model.name
@@ -116,8 +98,27 @@ def build_model(cfg: DictConfig) -> nn.Module:
     if name == "tsm_baseline":
         dropout = cfg.model.get("dropout", 0.5)
         print("Building TSM with dropout, p =", dropout)
-        return TSMBaseline(num_classes=num_classes, num_frames=num_frames, pretrained=pretrained,
-                           dropout=float(dropout), n_div=int(cfg.model.get("fold_div", 8)))
+        return TSMBaseline(
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+            dropout=float(dropout),
+            n_div=int(cfg.model.get("fold_div", 8)),
+            in_channels=int(cfg.model.get("in_channels", 3)),
+            size=int(cfg.model.get("model_size", 18))
+        )
+    if name == "tsm_attention":
+        dropout = cfg.model.get("dropout", 0.1)
+        print("Building TSM with Attention and dropout, p =", dropout)
+        return TSMAttention(
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+            dropout=float(dropout),
+            n_div=int(cfg.model.get("fold_div", 8)),
+            in_channels=int(cfg.model.get("in_channels", 3)),
+            attention_dropout=float(cfg.model.get("attention_dropout", 0.3))
+        )
     if name == "r2plus1d":
         return R2Plus1DBaseline(num_classes=num_classes, pretrained=pretrained)
     if name == "cnn_baseline":
@@ -208,8 +209,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     scaler: torch.cuda.amp.GradScaler,
-    mixup_fn: Optional[VideoMixUp] = None,
-    accumulation_steps: int = 1,
+    mixup_fn: Optional[v2.MixUp] = None,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
@@ -364,7 +364,7 @@ def main(cfg: DictConfig) -> None:
     mixup_alpha = float(cfg.training.get("mixup_alpha", 0.0))
     mixup_fn = None
     if mixup_alpha > 0.0:
-        mixup_fn = VideoMixUp(alpha=mixup_alpha, num_classes=int(cfg.model.num_classes))
+        mixup_fn = v2.MixUp(alpha=mixup_alpha, num_classes=int(cfg.model.num_classes))
 
     label_smoothing = float(cfg.training.get("label_smoothing", 0.0))
     loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
@@ -382,6 +382,8 @@ def main(cfg: DictConfig) -> None:
 
     if opt_type == "adamw":
         optimizer = torch.optim.AdamW(params, lr=base_lr, weight_decay=weight_decay)
+    elif opt_type == "sgd":
+        optimizer = torch.optim.SGD(params, lr=base_lr, weight_decay=weight_decay, momentum=0.9)
     else:
         optimizer = torch.optim.Adam(params, lr=base_lr, weight_decay=weight_decay)
         

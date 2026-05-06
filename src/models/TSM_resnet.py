@@ -70,10 +70,48 @@ def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) ->
     return model
 
 class TSMBaseline(nn.Module):
-    def __init__(self, num_classes: int, num_frames: int, pretrained: bool = False, dropout: float = 0, n_div: int = 8) -> None:
+    def __init__(
+        self, 
+        num_classes: int, 
+        num_frames: int, 
+        pretrained: bool = False, 
+        dropout: float = 0, 
+        n_div: int = 8,
+        in_channels: int = 3,
+        size: int = 18
+    ) -> None:
         super().__init__()
-        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
-        backbone = models.resnet18(weights=weights)
+        if size == 18:
+            weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet18(weights=weights)
+        elif size == 34:
+            weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+            backbone = models.resnet34(weights=weights)
+        else:
+            raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
+
+        # =========================================================
+        # THE 6-CHANNEL SURGERY (Must happen before TSM injection)
+        # =========================================================
+        if in_channels != 3:
+            old_conv = backbone.conv1
+            # Create a new Conv2d with dynamically sized input channels
+            backbone.conv1 = nn.Conv2d(
+                in_channels, 
+                old_conv.out_channels,
+                kernel_size=old_conv.kernel_size,
+                stride=old_conv.stride,
+                padding=old_conv.padding,
+                bias=False
+            )
+            
+            # The Pretraining Preservation Trick
+            if pretrained:
+                with torch.no_grad():
+                    # Copy the original ImageNet RGB weights into the first 3 channels
+                    backbone.conv1.weight[:, :3] = old_conv.weight
+                    # Initialize the new "Difference" channels to zero.
+                    backbone.conv1.weight[:, 3:] = 0.0
 
         # Inject the Temporal Shift Module into the backbone
         backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)

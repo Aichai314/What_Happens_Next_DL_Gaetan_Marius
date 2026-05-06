@@ -1,0 +1,37 @@
+# @package _global_
+# TSM + ResNet18  —  Track A
+# python src/train.py experiment=tsm_attention_from_scratch
+defaults:
+  - override /model: tsm_attention
+
+model:
+  pretrained: false
+  fold_div: 8
+  in_channels: 6
+  dropout: 0.1
+  attention_dropout: 0.1
+
+training:
+  augmentation: true
+  mixup_alpha: 0.4
+  epochs: 40
+  batch_size: 128 # Should be just the limit
+  num_workers: 4
+  lr: 1e-3
+  optimizer: adamw
+  weight_decay: 1e-1
+  scheduler: warmup_cosine
+  warmup_epochs: 4
+  label_smoothing: 0.2
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_tsm_attention.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_tsm_attention.pt
+  # resume_from: ${hydra:runtime.cwd}/latest_model_tsm_attention.pt
+
+dataset:
+  num_frames: 4
+  use_frame_differencing: true
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.5
+  blur_prob: 0.2
