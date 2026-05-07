@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
 
+import wandb
 import hydra
 import torch
 import torch.nn as nn
@@ -239,6 +240,11 @@ def train_one_epoch(
 
         if (step + 1) % accumulation_steps == 0 or (step + 1) == len(data_loader):
             scaler.step(optimizer)
+            wandb.log({
+                "train/loss": loss.item(),
+                "train/learning_rate": optimizer.param_groups[0]['lr'],
+                "train/running_accuracy": correct / max(total, 1)
+            })
             scaler.update()
             optimizer.zero_grad()
 
@@ -296,6 +302,13 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
     set_seed(int(cfg.dataset.seed))
+    
+    wandb_config = OmegaConf.to_container(cfg, resolve=True)
+    
+    wandb.init(
+        project="what-happens-next-video", 
+        config=wandb_config # Log your learning rate, batch size, etc.
+    )
 
     device_str = cfg.training.device
     if device_str == "cuda" and not torch.cuda.is_available():
@@ -357,6 +370,10 @@ def main(cfg: DictConfig) -> None:
     )
 
     model = build_model(cfg).to(device)
+    
+    # log="all" tells it to track BOTH weights and gradients.
+    # log_freq=50 means it updates the web dashboard every 50 batches.
+    wandb.watch(model, log="all", log_freq=50)
     
     # --- Mixup Configuration ---
     mixup_alpha = float(cfg.training.get("mixup_alpha", 0.0))
@@ -446,6 +463,12 @@ def main(cfg: DictConfig) -> None:
             accumulation_steps=accumulation_steps,
         )
         val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
+        
+        wandb.log({
+            "val/loss": val_loss,
+            "val/accuracy_top1": val_acc,
+            "epoch": epoch + 1
+        })
 
         if scheduler is not None:
             scheduler.step()

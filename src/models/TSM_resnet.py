@@ -54,7 +54,9 @@ class TSMBaseline(nn.Module):
         backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)
         
         if model_cfg.get("inject_tdm", False):
-            backbone = inject_tdm_into_resnet(backbone, num_frames=num_frames)
+            backbone = inject_tdm_into_resnet(backbone, num_frames=num_frames,
+                                              full = model_cfg.get("full_tdm", False),
+                                              split = model_cfg.get("split_tdm", True))
 
         # Replace the original 1000-way ImageNet head with identity
         feature_dim = backbone.fc.in_features  # 512 for ResNet18

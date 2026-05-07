@@ -18,6 +18,9 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
     "pytorchvideo>=0.1.5",
+    "wandb>=0.26.1",
+    "xgboost>=3.2.0",
+    "optuna>=4.8.0",
 ]
 
 [tool.uv]

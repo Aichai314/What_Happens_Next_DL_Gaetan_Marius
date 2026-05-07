@@ -5,3 +5,4 @@ model:
   num_classes: ${num_classes}
   dropout: 0.0 # No dropout in the baseline
   model_size: 34
+  split_tdm: true # Use SplitTDM instead of regular TemporalDifference by default

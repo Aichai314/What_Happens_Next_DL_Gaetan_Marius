@@ -9,6 +9,7 @@ model:
   fold_div: 8
   in_channels: 6
   change_stem: true
+  dropout: 0.2 # New (delete if less than 37.94%)
 
 training:
   augmentation: true

@@ -213,3 +213,9 @@ processed_data/
 processed_data
 .python-version
 frames.zip
+
+# WandB
+wandb/
+
+# Ensemble cache
+.ensemble_cache/

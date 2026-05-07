@@ -105,12 +105,15 @@ def main(cfg: DictConfig) -> None:
     # CONFIGURATION: Define your Kaggle Roster here
     # =========================================================
     my_models = [
-        "best_model_tsm34_36-98.pt",
-        "checkpoints/tsm_attention_fromscratch_37_85.pt",
-        "best_model_cnn_lstm_30-75.pt", # Or 35-20 not sure which one is better
-        "best_model_trn_29-53.pt",
-        "best_model_x3d_xs_29-44.pt",
-        "best_model_r2plus1d_30-97.pt",
+        "checkpoints/best_model_tsm_36-03.pt",
+        "checkpoints/tsm_full_tdm_34-50.pt",
+        "checkpoints/low_overfit_tdm_6channels_34-94.pt",
+        "checkpoints/tsm_6channels_stem_37-95.pt",
+        "checkpoints/attn_stage2_best_38-99.pt",
+        "checkpoints/best_model_cnn_lstm_30-75.pt",
+        "checkpoints/best_model_trn_29-53.pt",
+        "checkpoints/best_model_x3d_xs_29-44.pt",
+        "checkpoints/best_model_r2plus1d_30-97.pt",
     ]
 
     # PHASE 1: Train the Meta-Learner (Logistic Regression)
@@ -118,7 +121,13 @@ def main(cfg: DictConfig) -> None:
     print("PHASE 1: Training the Meta-Learner on Validation Set")
     print("="*50)
     val_dir = Path(cfg.dataset.val_dir).resolve()
-    meta_model = evaluate_and_stack_n_models(my_models, val_dir)
+    meta_model, label_encoder = evaluate_and_stack_n_models(
+        my_models,
+        str(val_dir),
+        meta_learner='xgboost',
+        use_bayesian_optimization=True,
+        bayesian_optimization_trials=50
+    )
 
     # PHASE 2: Discover Test Videos using create_submission logic[cite: 5]
     print("\n" + "="*50)
@@ -147,7 +156,7 @@ def main(cfg: DictConfig) -> None:
     print("\n" + "="*50)
     print("PHASE 4: Generating Kaggle Predictions")
     print("="*50)
-    predictions = meta_model.predict(X_test)
+    predictions = label_encoder.inverse_transform(meta_model.predict(X_test))
 
     # Save to CSV[cite: 5]
     output_path = Path("submissions/ensemble_submission_final.csv")

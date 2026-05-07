@@ -104,14 +104,14 @@ if __name__ == "__main__":
     # You can now cleanly process any number of models sequentially!
     
     evaluate_and_plot(
-        ckpt_path="best_model_tsm.pt",
+        ckpt_path="checkpoints/attn_stage2_best_38-99.pt",
         val_dir="processed_data/val2/val",
         model_name="TSM Spatial Expert",
         cmap="Blues"
     )
 
     evaluate_and_plot(
-        ckpt_path="best_model_r2plus1d.pt",
+        ckpt_path="checkpoints/best_model_x3d_xs_29-44.pt",
         val_dir="processed_data/val2/val",
         model_name="R(2+1)D Temporal Expert",
         cmap="Oranges"

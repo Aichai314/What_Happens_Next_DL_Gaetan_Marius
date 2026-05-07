@@ -123,7 +123,7 @@ class VideoTransform:
                 brightness=0.4, contrast=0.4, saturation=0.3, hue=0.1
             )
         
-        self.use_frame_differencing = cfg.dataset.get("use_frame_differencing", False)
+        self.use_frame_differencing = cfg.get("dataset", {}).get("use_frame_differencing", False)
 
     def __call__(self, frames: List[Image.Image]) -> torch.Tensor:
         # Temporal Jittering: Simule une frame "droppée" en la dupliquant
@@ -468,14 +468,19 @@ class SplitTDM(nn.Module):
         return out.view(bt, c, h, w)
 
 
-def inject_tdm_into_resnet(model: nn.Module, num_frames: int) -> nn.Module:
+def inject_tdm_into_resnet(model: nn.Module, num_frames: int, full: bool = False,
+                           split: bool = True) -> nn.Module:
     """
     Iterates through a torchvision ResNet and wraps the SECOND convolution 
-    of each BasicBlock with the SplitTDM operation.
+    of each BasicBlock with the SplitTDM (default) or TemporalDifference operation.
     This works in perfect synergy with TSM (which wraps conv1).
     """
     for name, module in model.named_modules():
-        if isinstance(module, models.resnet.BasicBlock):
+        if isinstance(module, models.resnet.BasicBlock) and (full or'layer4' in name):
+            print(f"--> Injecting {"SplitTDM" if split else "TemporalDifference"} into {name}.conv2")
             # Wrap conv2 in the BasicBlock (TSM is on conv1)
-            module.conv2 = SplitTDM(module.conv2, num_frames=num_frames)
+            if split:
+                module.conv2 = SplitTDM(module.conv2, num_frames=num_frames)
+            else:
+                module.conv2 = TemporalDifference(module.conv2, num_frames=num_frames)
     return model
