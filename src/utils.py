@@ -344,14 +344,21 @@ def inject_tsm_into_resnet(model: nn.Module, num_frames: int, n_div: int = 8) ->
             module.conv1 = TemporalShift(module.conv1, num_frames=num_frames, n_div=n_div)
     return model
 
-def replace_resnet_stem(backbone: nn.Module, in_channels: int = 3) -> nn.Module:
+def replace_resnet_stem(backbone: nn.Module, in_channels: int = 3,
+                        keep_original: bool = True) -> nn.Module:
     """
-    Replaces the standard ResNet 7x7 stride-2 convolution with three 3x3 convolutions.
+    Replaces the standard ResNet 7x7 stride-2 convolution with three 3x3 convolutions if keep_original is False.
+    Otherwise, it replaces it simply changes the number of input channels.
     This preserves spatial data much better early in the network.
     Automatically handles custom input channels (e.g., 6 for Early Fusion).
     """
     out_channels = backbone.conv1.out_channels # Usually 64
     mid_channels = out_channels // 2           # Usually 32
+
+    if keep_original:
+        # Just replace the original conv1 with a new one that has the desired in_channels
+        backbone.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=7, stride=2, padding=3, bias=False)
+        return backbone
 
     # Create the new high-resolution stem
     new_stem = nn.Sequential(
@@ -375,3 +382,100 @@ def replace_resnet_stem(backbone: nn.Module, in_channels: int = 3) -> nn.Module:
     # NOTE: We do NOT replace backbone.bn1, backbone.relu, or backbone.maxpool.
     # The output of new_stem flows perfectly into the original bn1.
     return backbone
+
+class TemporalDifference(nn.Module):
+    """
+    Calculates explicit semantic velocity between frames at the feature level.
+    Adds the difference (t - (t-1)) as a residual to the current frame.
+    """
+    def __init__(self, net: nn.Module, num_frames: int) -> None:
+        super().__init__()
+        self.net = net
+        self.num_frames = num_frames
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.differencing(x, self.num_frames)
+        return self.net(x)
+
+    @staticmethod
+    def differencing(x: torch.Tensor, num_frames: int) -> torch.Tensor:
+        # x shape: (B*T, C, H, W)
+        bt, c, h, w = x.size()
+        batch_size = bt // num_frames
+        
+        # Reshape to explicitly expose the temporal dimension
+        x_view = x.view(batch_size, num_frames, c, h, w)
+        
+        # Calculate the semantic velocity: V(t) = F(t) - F(t-1)
+        diffs = torch.zeros_like(x_view)
+        diffs[:, 1:] = x_view[:, 1:] - x_view[:, :-1]
+        
+        # Inject velocity back into the spatial representation
+        # Mathematically this acts as a first-order Taylor expansion predicting the next frame
+        out = x_view + diffs
+        
+        # Flatten back to (B*T, C, H, W) for the 2D CNN
+        return out.view(bt, c, h, w)
+
+class SplitTDM(nn.Module):
+    """
+    Channel-Split Temporal Difference Module.
+    Divides features into 3 groups: Spatial, Past Velocity, and Future Velocity.
+    Perfect for training from scratch as it prevents variance explosion.
+    """
+    def __init__(self, net: nn.Module, num_frames: int) -> None:
+        super().__init__()
+        self.net = net
+        self.num_frames = num_frames
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.split_differencing(x, self.num_frames)
+        return self.net(x)
+
+    @staticmethod
+    def split_differencing(x: torch.Tensor, num_frames: int) -> torch.Tensor:
+        # x shape: (B*T, C, H, W)
+        bt, c, h, w = x.size()
+        batch_size = bt // num_frames
+        
+        # Reshape to explicitly expose the temporal dimension
+        x_view = x.view(batch_size, num_frames, c, h, w)
+        out = torch.zeros_like(x_view)
+        
+        # Calculate split sizes
+        c1 = c // 2          # 50% for standard spatial (Safe Zone)
+        c2 = c // 4          # 25% for Past Velocity
+        c3 = c - (c1 + c2)   # Remaining ~25% for Future Velocity
+        
+        # =========================================================
+        # Group 1: Standard Spatial (The "Safe Zone" for learning)
+        # =========================================================
+        out[:, :, :c1] = x_view[:, :, :c1]
+        
+        # =========================================================
+        # Group 2: Past Motion [ F(t) - F(t-1) ]
+        # =========================================================
+        # Note: Frame 0 has no past, so it remains 0 in the `out` tensor.
+        out[:, 1:, c1:c1+c2] = x_view[:, 1:, c1:c1+c2] - x_view[:, :-1, c1:c1+c2]
+        
+        # =========================================================
+        # Group 3: Future Motion [ F(t+1) - F(t) ]
+        # =========================================================
+        # Note: The last frame has no future, so it remains 0.
+        out[:, :-1, c1+c2:] = x_view[:, 1:, c1+c2:] - x_view[:, :-1, c1+c2:]
+        
+        # Flatten back to (B*T, C, H, W) for the 2D CNN
+        return out.view(bt, c, h, w)
+
+
+def inject_tdm_into_resnet(model: nn.Module, num_frames: int) -> nn.Module:
+    """
+    Iterates through a torchvision ResNet and wraps the SECOND convolution 
+    of each BasicBlock with the SplitTDM operation.
+    This works in perfect synergy with TSM (which wraps conv1).
+    """
+    for name, module in model.named_modules():
+        if isinstance(module, models.resnet.BasicBlock):
+            # Wrap conv2 in the BasicBlock (TSM is on conv1)
+            module.conv2 = SplitTDM(module.conv2, num_frames=num_frames)
+    return model

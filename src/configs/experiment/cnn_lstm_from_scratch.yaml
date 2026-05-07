@@ -6,27 +6,30 @@ defaults:
 model:
   pretrained: false
   lstm_hidden_size: 1024
+  in_channels: 6
+  backbone_size: 34
 
 training:
-  epochs: 40           # 60 epochs is perfect for an overnight ResNet run
+  epochs: 40           # 40 epochs is perfect for an overnight ResNet run
   batch_size: 128
   lr: 1e-3             # CNNs from scratch learn very efficiently at 1e-3
   augmentation: true
   num_workers: 12
   mixup_alpha: 0.4     # Safe mixup (avoids 50/50 gray mush)
   optimizer: adamw
-  weight_decay: 5e-2  
+  weight_decay: 1e-1 
   scheduler: warmup_cosine
   warmup_epochs: 4
-  label_smoothing: 0.15
+  label_smoothing: 0.2
   checkpoint_path: ${hydra:runtime.cwd}/best_model_cnn_lstm.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_cnn_lstm.pt
   #resume_from: ${hydra:runtime.cwd}/latest_model_cnn_lstm.pt
 
 dataset:
   num_frames: 4
+  use_frame_differencing: true
 
 augmentation:
   temporal_drop_prob: 0.1
-  grayscale_prob: 0.2  # Kept low so it can use color to track objects initially
-  blur_prob: 0.15
+  grayscale_prob: 0.5
+  blur_prob: 0.3

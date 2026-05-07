@@ -8,11 +8,12 @@ model:
   pretrained: false
   fold_div: 8
   in_channels: 6
-  dropout: 0.2
-  attention_dropout: 0.1
+  dropout: 0.3
+  attention_dropout: 0.15
   freeze_backbone: false
   backbone_size: 34
   pursue_from: ${hydra:runtime.cwd}/attn_stage1_best.pt
+  change_stem: true
 
 training:
   augmentation: true

@@ -77,7 +77,8 @@ class TSMAttention(nn.Module):
             raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
 
         # Replace the ResNet stem
-        backbone = replace_resnet_stem(backbone, in_channels=in_channels)
+        backbone = replace_resnet_stem(backbone, in_channels=in_channels,
+                                       keep_original=not model_cfg.get("change_stem", False))
 
         # Inject TSM
         backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)

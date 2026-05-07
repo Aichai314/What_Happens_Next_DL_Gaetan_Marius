@@ -61,11 +61,38 @@ def inspect_checkpoint(ckpt_path: str):
             # Fallback to standard Python pretty-print if it's a raw dict
             pprint.pprint(config)
 
+    # Modify config.model.name if provided
+    if False:
+        print("\n" + "="*50)
+        print(" 🔧 MODIFYING CONFIG")
+        print("="*50)
+        
+        if config is None:
+            print("❌ Cannot modify: No configuration found in checkpoint.")
+        else:
+            try:
+                # Access and modify the model name
+                if isinstance(config, dict):
+                    if "model" not in config:
+                        config["model"] = {}
+                    if not isinstance(config["model"], dict):
+                        config["model"] = {}
+                    old_name = config["model"].get("name", "Not Found")
+                    config["model"]["model_size"] = 34
+                    print(f"▶ Changed model.name from '{old_name}' to '{34}'")
+                    
+                    # Save the modified checkpoint
+                    torch.save(ckpt, path)
+                    print(f"✅ Checkpoint saved successfully to {path}")
+                else:
+                    print("❌ Config is not a dictionary format.")
+            except Exception as e:
+                print(f"❌ Failed to modify config. Error: {e}")
+
     print("="*50)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inspect a trained PyTorch checkpoint.")
-    parser.add_argument("ckpt_path", type=str, help="Path to the .pt checkpoint file")
-    
+    parser.add_argument("ckpt_path", type=str, help="Path to the .pt checkpoint file")    
     args = parser.parse_args()
     inspect_checkpoint(args.ckpt_path)

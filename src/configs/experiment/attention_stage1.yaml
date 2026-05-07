@@ -8,11 +8,12 @@ model:
   pretrained: false
   fold_div: 8
   in_channels: 6
-  dropout: 0.2
-  attention_dropout: 0.1
+  dropout: 0.3
+  attention_dropout: 0.15
   backbone_size: 34
-  pretrained_backbone_path: ${hydra:runtime.cwd}/best_model_backbone_37-03.pt
+  pretrained_backbone_path: ${hydra:runtime.cwd}/best_model_backbone_37-26.pt
   freeze_backbone: true
+  change_stem: true
 
 training:
   augmentation: true
@@ -21,7 +22,7 @@ training:
   batch_size: 128
   lr: 1e-3                  # High LR to train the blank head quickly
   optimizer: adamw
-  weight_decay: 1e-2        # Lighter weight decay for just the head
+  weight_decay: 2e-2        # Lighter weight decay for just the head
   scheduler: warmup_cosine
   warmup_epochs: 2
   label_smoothing: 0.15

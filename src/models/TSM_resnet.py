@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 from torchvision import models
 from omegaconf import DictConfig
-from utils import inject_tsm_into_resnet, replace_resnet_stem
+from utils import inject_tsm_into_resnet, replace_resnet_stem, inject_tdm_into_resnet
 
 class TSMBaseline(nn.Module):
     def __init__(
@@ -48,10 +48,13 @@ class TSMBaseline(nn.Module):
         else:
             raise ValueError(f"Unsupported model size: {size}. Choose 18 or 34.")
 
-        backbone = replace_resnet_stem(backbone, in_channels=in_channels)
+        backbone = replace_resnet_stem(backbone, in_channels=in_channels, keep_original=not model_cfg.get("change_stem", False))
 
         # Inject the Temporal Shift Module into the backbone
         backbone = inject_tsm_into_resnet(backbone, num_frames=num_frames, n_div=n_div)
+        
+        if model_cfg.get("inject_tdm", False):
+            backbone = inject_tdm_into_resnet(backbone, num_frames=num_frames)
 
         # Replace the original 1000-way ImageNet head with identity
         feature_dim = backbone.fc.in_features  # 512 for ResNet18

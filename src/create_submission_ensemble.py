@@ -106,7 +106,8 @@ def main(cfg: DictConfig) -> None:
     # =========================================================
     my_models = [
         "best_model_tsm34_36-98.pt",
-        "best_model_cnn_lstm_30-75.pt",
+        "checkpoints/tsm_attention_fromscratch_37_85.pt",
+        "best_model_cnn_lstm_30-75.pt", # Or 35-20 not sure which one is better
         "best_model_trn_29-53.pt",
         "best_model_x3d_xs_29-44.pt",
         "best_model_r2plus1d_30-97.pt",
