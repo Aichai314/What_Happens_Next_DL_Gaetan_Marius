@@ -211,6 +211,7 @@ outputs/
 *.pt
 processed_data/
 processed_data
+Model_checkpoints
 .python-version
 frames.zip
 

@@ -521,14 +521,5 @@ def main(cfg: DictConfig) -> None:
     results_path = checkpoint_path.parent / "training_results.csv"
     log_run(cfg, best_val_accuracy, time.time() - t_start, results_path)
 
-    prefix = "pretrained" if bool(cfg.model.pretrained) else "fromscratch"
-    acc_str = f"{best_val_accuracy * 100:.2f}".replace(".", "_")
-    checkpoints_dir = checkpoint_path.parent / "checkpoints"
-    checkpoints_dir.mkdir(exist_ok=True)
-    unique_path = checkpoints_dir / f"{cfg.model.name}_{prefix}_{acc_str}.pt"
-    shutil.copy2(checkpoint_path, unique_path)
-    print(f"  Checkpoint archived to {unique_path}")
-
-
 if __name__ == "__main__":
     main()
