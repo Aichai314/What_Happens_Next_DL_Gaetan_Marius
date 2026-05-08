@@ -146,7 +146,7 @@ def main(cfg: DictConfig) -> None:
     pretrained_used = bool(ckpt.get("pretrained", cfg.model.pretrained))
     num_frames = int(ckpt.get("num_frames", cfg.dataset.num_frames))
     num_classes = int(ckpt.get("num_classes", cfg.model.num_classes))
-    eval_transform = VideoTransform(is_training=False, use_imagenet_norm=pretrained_used)
+    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=pretrained_used)
 
     val_dir = Path(cfg.dataset.val_dir).resolve()
     val_samples = collect_video_samples(val_dir)

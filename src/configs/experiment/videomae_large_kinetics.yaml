@@ -5,6 +5,8 @@ defaults:
   - override /model: videomae_large_kinetics
 
 training:
+  checkpoint_path: ${hydra:runtime.cwd}/checkpoints/best_model_videomae_large_kinetics.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/checkpoints/latest_model_videomae_large_kinetics.pt
   epochs: 20
   batch_size: 8
   gradient_accumulation_steps: 4

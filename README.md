@@ -66,6 +66,12 @@ python src/train.py training.epochs=10 training.batch_size=16 training.lr=0.0001
 
 The best checkpoint is written to **`training.checkpoint_path`** (see printed path). It always stores the **full merged Hydra config**, so evaluation and submission reload the same architecture automatically.
 
+To resume training from a checkpoint, use `+training.resume_from=` (the `+` prefix is required because `resume_from` is not defined in the base config struct):
+
+```bash
+python src/train.py experiment=videomae_v2 +training.resume_from=checkpoints/latest_model_videomae_v2_ssv2.pt training.epochs=30
+```
+
 Hydra may create an `outputs/` folder with logs for each run.
 
 ## Evaluation
