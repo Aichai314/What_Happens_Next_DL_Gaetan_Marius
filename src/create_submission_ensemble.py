@@ -11,6 +11,7 @@ This script:
 
 import csv
 import gc
+import hashlib
 from pathlib import Path
 from typing import List
 
@@ -36,12 +37,38 @@ from create_submission import (
 from evaluate_ensemble import evaluate_and_stack_n_models
 
 
+def _get_cache_dir() -> Path:
+    """Get or create the cache directory for storing computed logits."""
+    cache_dir = Path(".ensemble_cache")
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir
+
+
+def _get_test_cache_path(ckpt_path: str, test_root: str) -> Path:
+    """
+    Compute a unique cache file path for a checkpoint's test set probabilities.
+    Hash is based on checkpoint path and test directory to ensure uniqueness.
+    """
+    cache_key = hashlib.md5(f"{ckpt_path}:{test_root}".encode()).hexdigest()
+    ckpt_name = Path(ckpt_path).stem
+    return _get_cache_dir() / f"test_{ckpt_name}_{cache_key}.npy"
+
+
 def extract_test_probabilities(
-    ckpt_paths: List[str], test_root: Path, video_dirs: List[Path], device: torch.device
+    ckpt_paths: List[str], test_root: Path, video_dirs: List[Path], device: torch.device, use_cache: bool = True
 ) -> np.ndarray:
     """
     Sequentially loads models to extract test set probabilities without crashing VRAM.
     Crucially, applies the exact same Softmax normalization as the Val set extraction.
+    
+    Probabilities are cached to .ensemble_cache/ to avoid recomputation on re-runs.
+    
+    Args:
+        ckpt_paths: List of checkpoint paths
+        test_root: Path to test directory root
+        video_dirs: List of test video directories
+        device: torch device (cuda or cpu)
+        use_cache: If True, cache and reuse test probabilities. Default: True
     """
     all_expert_probs = []
     
@@ -50,6 +77,14 @@ def extract_test_probabilities(
 
     for i, ckpt_path in enumerate(ckpt_paths):
         print(f"\n--- Extracting Test Features for Expert {i+1}/{len(ckpt_paths)}: {Path(ckpt_path).name} ---")
+        
+        # 0. Check cache first
+        cache_path = _get_test_cache_path(ckpt_path, str(test_root)) if use_cache else None
+        if use_cache and cache_path.exists():
+            print(f"Loading cached test probabilities from {cache_path.name}...")
+            expert_probs = np.load(cache_path)
+            all_expert_probs.append(expert_probs)
+            continue
         
         # Load Model
         ckpt = torch.load(ckpt_path, map_location=device)
@@ -84,7 +119,13 @@ def extract_test_probabilities(
                 model_probs.append(probs)
 
         # Stack this expert's array
-        all_expert_probs.append(np.vstack(model_probs))
+        expert_probs = np.vstack(model_probs)
+        all_expert_probs.append(expert_probs)
+        
+        # Cache the probabilities for future runs
+        if use_cache and cache_path:
+            np.save(cache_path, expert_probs)
+            print(f"Cached test probabilities to {cache_path.name}")
 
         # Clear VRAM[cite: 3]
         del model
@@ -114,6 +155,14 @@ def main(cfg: DictConfig) -> None:
         "checkpoints/best_model_trn_29-53.pt",
         "checkpoints/best_model_x3d_xs_29-44.pt",
         "checkpoints/best_model_r2plus1d_30-97.pt",
+        #"checkpoints/best_model_cnn_gru_30-54.pt",
+        #"checkpoints/cnn_lstm_6channels_35-20.pt",
+        "checkpoints/convnext_best_27-04.pt",
+        "checkpoints/timesformer_best_24-33.pt",
+        "checkpoints/mobilenet_spatial_expert_38-09.pt",
+        "checkpoints/mobilenet_motion_expert_33-92.pt",
+        #"checkpoints/tsm_tdm_6channels_36_28.pt",
+        #"checkpoints/mobilenet_6channels_37-58.pt",
     ]
 
     # PHASE 1: Train the Meta-Learner (Logistic Regression)
@@ -126,7 +175,6 @@ def main(cfg: DictConfig) -> None:
         str(val_dir),
         meta_learner='xgboost',
         use_bayesian_optimization=True,
-        bayesian_optimization_trials=50
     )
 
     # PHASE 2: Discover Test Videos using create_submission logic[cite: 5]
@@ -149,7 +197,7 @@ def main(cfg: DictConfig) -> None:
     print("\n" + "="*50)
     print("PHASE 3: Extracting Expert Probabilities (Test Set)")
     print("="*50)
-    X_test = extract_test_probabilities(my_models, test_root, video_dirs, device)
+    X_test = extract_test_probabilities(my_models, test_root, video_dirs, device, use_cache=True)
     print(f"Final Test Feature Matrix Shape: {X_test.shape}")
 
     # PHASE 4: Predict & Generate CSV

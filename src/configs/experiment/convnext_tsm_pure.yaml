@@ -1,0 +1,35 @@
+# @package _global_
+# 6 channels + ConvNeXt-Tiny + TSM — trained FROM SCRATCH (no ImageNet weights)
+# python src/train.py experiment=convnext_tsm_pure
+defaults:
+  - override /model: convnext_pure
+
+model:
+  pretrained: false
+  in_channels: 6
+  transformer: false
+
+training:
+  epochs: 40
+  batch_size: 64 # Should be near limit (around 3GB left)
+  lr: 1e-3
+  optimizer: adamw
+  weight_decay: 1e-1
+  scheduler: warmup_cosine
+  warmup_epochs: 4
+  mixup_alpha: 0.4
+  label_smoothing: 0.2
+  augmentation: true
+  num_workers: 4
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_convnext.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_convnext.pt
+  resume_from: ${hydra:runtime.cwd}/best_model_convnext_save.pt
+
+dataset:
+  num_frames: 4
+  use_frame_differencing: true
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.5
+  blur_prob: 0.3

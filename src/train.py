@@ -39,7 +39,9 @@ from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.first_cnn import FirstCNN
-from models.convnext_tsm_transformer import ConvNeXtTSMTransformer
+from models.convnext_tsm_transformer import ConvNeXtTSMTransformer, ConvNeXtTSMPure
+from models.mobilenet_tsm import MobileNetV2_TSM
+from models.timesformer_tiny import TimeSformerTiny
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet import TSMBaseline
 from models.videomae_v2 import VideoMAEFinetune
@@ -152,6 +154,13 @@ def build_model(cfg: DictConfig) -> nn.Module:
         )
 
     if name == "convnext_tsm":
+        if not cfg.model.get("transformer", True):
+            return ConvNeXtTSMPure(
+                num_classes=num_classes,
+                num_frames=num_frames,
+                in_channels=int(cfg.model.get("in_channels", 6)),
+                fold_div=int(cfg.model.get("fold_div", 8)),
+            )
         return ConvNeXtTSMTransformer(
             num_classes=num_classes,
             num_frames=int(cfg.dataset.num_frames),
@@ -195,6 +204,23 @@ def build_model(cfg: DictConfig) -> nn.Module:
             pretrained=pretrained,
             llrd=float(cfg.model.get("llrd", 0.75)),
             num_frames=num_frames,
+        )
+    
+    if name == "timesformer":
+        return TimeSformerTiny(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            dropout=float(cfg.model.get("dropout", 0.1))
+        )
+    if name == "mobilenet":
+        return MobileNetV2_TSM(
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+            fold_div=int(cfg.model.get("fold_div", 8)),
+            in_channels=int(cfg.model.get("in_channels", 3)),
+            dropout=float(cfg.model.get("dropout", 0.2))
         )
 
     raise ValueError(f"Unknown model.name: {name}")
@@ -372,8 +398,8 @@ def main(cfg: DictConfig) -> None:
     model = build_model(cfg).to(device)
     
     # log="all" tells it to track BOTH weights and gradients.
-    # log_freq=50 means it updates the web dashboard every 50 batches.
-    wandb.watch(model, log="all", log_freq=50)
+    # log_freq=100 means it updates the web dashboard every 100 batches.
+    wandb.watch(model, log="all", log_freq=100)
     
     # --- Mixup Configuration ---
     mixup_alpha = float(cfg.training.get("mixup_alpha", 0.0))

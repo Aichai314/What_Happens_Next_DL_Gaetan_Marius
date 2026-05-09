@@ -5,7 +5,7 @@ from pathlib import Path
 from tqdm import tqdm
 from omegaconf import OmegaConf
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import LabelEncoder
 from omegaconf import DictConfig
@@ -107,16 +107,16 @@ def _create_xgboost_model(hyperparams: Optional[Dict] = None) -> XGBClassifier:
     """
     if hyperparams is None:
         hyperparams = {}
-    
+    {'max_depth': 4, 'learning_rate': 0.04, 'n_estimators': 500, 'subsample': 0.7, 'colsample_bytree': 0.5, 'min_child_weight': 5, 'lambda': 4, 'alpha': 0.75}
     defaults = {
         'max_depth': 4,
-        'learning_rate': 0.05,
+        'learning_rate': 0.04,
         'n_estimators': 500,
-        'subsample': 0.8,
-        'colsample_bytree': 0.8,
-        'min_child_weight': 1,
-        'lambda': 1.0,
-        'alpha': 0.2,
+        'subsample': 0.7,
+        'colsample_bytree': 0.5,
+        'min_child_weight': 5,
+        'lambda': 4,
+        'alpha': 0.75,
         'early_stopping_rounds': 30,
         'objective': 'multi:softprob',
         'random_state': 42,
@@ -147,15 +147,15 @@ def _optimize_xgboost_hyperparams_optuna(
     def objective(trial: optuna.Trial) -> float:
         # Suggest hyperparameters
         params = {
-            'max_depth': trial.suggest_int('max_depth', 2, 5), # Keep trees shallow to prevent overfitting on validation set
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
-            'n_estimators': trial.suggest_int('n_estimators', 100, 500),
-            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-            'min_child_weight': trial.suggest_int('min_child_weight', 1, 5),
+            'max_depth': trial.suggest_int('max_depth', 1, 3), # Keep trees shallow to prevent overfitting on validation set
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
+            'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+            'subsample': trial.suggest_float('subsample', 0.5, 0.8),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.7),
+            'min_child_weight': trial.suggest_int('min_child_weight', 5, 20),
             # Force L2 and L1 regularization not to be too low to prevent overfitting on validation set
-            'lambda': trial.suggest_float('lambda', 1.0, 5.0),
-            'alpha': trial.suggest_float('alpha', 0.1, 2.0),
+            'lambda': trial.suggest_float('lambda', 5.0, 20.0),
+            'alpha': trial.suggest_float('alpha', 1.0, 5.0),
         }
         
         model = _create_xgboost_model(params)
@@ -372,8 +372,6 @@ def evaluate_and_stack_n_models(
     # ---------------------------------------------------------
     # PART 2: BULLETPROOF META-LEARNER TRAINING (K-FOLD)
     # ---------------------------------------------------------
-    from sklearn.model_selection import StratifiedKFold, cross_val_score
-    import numpy as np
 
     print("\n" + "="*50)
     print("Evaluating N-Expert Meta-Learner with 5-Fold CV...")
@@ -419,16 +417,18 @@ def evaluate_and_stack_n_models(
             meta_model = _create_xgboost_model(best_params)
         else:
             # Use default hyperparameters
-            print("\nUsing default hyperparameters (no Bayesian optimization)")
+            # print("\nUsing default hyperparameters (no Bayesian optimization)")
+            print("\nUsing stored hyperparameters from previous Bayesian optimization (+ regularized a little more for safety)")
+            # Bayesian optim parameters:
             meta_model = _create_xgboost_model()
             print(f"Default Hyperparameters:")
             print(f"   max_depth: 4")
-            print(f"   learning_rate: 0.05")
+            print(f"   learning_rate: 0.04")
             print(f"   n_estimators: 500")
-            print(f"   subsample: 0.8")
-            print(f"   colsample_bytree: 0.8")
-            print(f"   lambda (L2): 1.0")
-            print(f"   alpha (L1): 0.2")
+            print(f"   subsample: 0.7")
+            print(f"   colsample_bytree: 0.5")
+            print(f"   lambda (L2): 4")
+            print(f"   alpha (L1): 0.75")
     
     # Run the Cross Validation
     print("\nEvaluating Meta-Learner with 5-Fold Stratified Cross-Validation...")
@@ -472,11 +472,12 @@ def evaluate_and_stack_n_models(
         # when we don't provide an eval_set
         if 'early_stopping_rounds' in final_params:
             del final_params['early_stopping_rounds']
-            
-        final_model = XGBClassifier(**final_params)
+        
+        # Re-instantiate with optimal trees and no early stopping for final training
+        meta_model = XGBClassifier(**final_params)
         
         # Train blindly on 100% of the data!
-        final_model.fit(X_meta, y_true_encoded, verbose=False)
+        meta_model.fit(X_meta, y_true_encoded, verbose=False)
         print(f"Final Model: Trained blindly on 100% data for exactly {optimal_trees} trees.")
     else:
         # LogisticRegression on full validation set
@@ -502,6 +503,14 @@ def main(cfg: DictConfig) -> None:
         "checkpoints/best_model_trn_29-53.pt",
         "checkpoints/best_model_x3d_xs_29-44.pt",
         "checkpoints/best_model_r2plus1d_30-97.pt",
+        #"checkpoints/best_model_cnn_gru_30-54.pt",
+        #"checkpoints/cnn_lstm_6channels_35-20.pt",
+        "checkpoints/convnext_best_27-04.pt",
+        "checkpoints/timesformer_best_24-33.pt",
+        "checkpoints/mobilenet_spatial_expert_38-09.pt",
+        "checkpoints/mobilenet_motion_expert_33-92.pt",
+        #"checkpoints/tsm_tdm_6channels_36_28.pt",
+        #"checkpoints/mobilenet_6channels_37-58.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())

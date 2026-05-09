@@ -1,0 +1,33 @@
+# @package _global_
+# MobileNetV2 + TSM (Pure Motion Expert)  —  Track A
+# python src/train.py experiment=mobilenet_motion_from_scratch
+defaults:
+  - override /model: mobilenet_baseline
+
+model:
+  pretrained: false
+  fold_div: 8
+
+training:
+  augmentation: true
+  mixup_alpha: 0.3
+  epochs: 50
+  batch_size: 64
+  num_workers: 12
+  lr: 1e-3
+  optimizer: adamw
+  weight_decay: 1e-1
+  scheduler: warmup_cosine
+  warmup_epochs: 5
+  label_smoothing: 0.2
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_mobilenet.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_mobilenet.pt
+  # resume_from: ${hydra:runtime.cwd}/latest_model_mobilenet.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.3
+  blur_prob: 0.15

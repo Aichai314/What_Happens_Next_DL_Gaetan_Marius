@@ -1,0 +1,10 @@
+# @package _global_
+model:
+  name: timesformer
+  num_classes: 33
+  img_size: 112
+  patch_size: 16
+  in_chans: 3
+  d_model: 384
+  num_heads: 6
+  depth: 8

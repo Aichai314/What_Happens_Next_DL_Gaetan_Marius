@@ -124,6 +124,7 @@ class VideoTransform:
             )
         
         self.use_frame_differencing = cfg.get("dataset", {}).get("use_frame_differencing", False)
+        self.only_motion = cfg.get("dataset", {}).get("only_motion", False)
 
     def __call__(self, frames: List[Image.Image]) -> torch.Tensor:
         # Temporal Jittering: Simule une frame "droppée" en la dupliquant
@@ -177,12 +178,16 @@ class VideoTransform:
         # =========================================================
         # EXPLICIT FRAME DIFFERENCING
         # =========================================================
-        if getattr(self, 'use_frame_differencing', False):
+        if self.use_frame_differencing:
             # Create a zero tensor for the differences
             diffs = torch.zeros_like(stacked_frames)
             
             # Diff[t] = Frame[t] - Frame[t-1]
             diffs[1:] = stacked_frames[1:] - stacked_frames[:-1]
+            
+            if self.only_motion:
+                # If only_motion is True, we discard the original frames and keep only the differences
+                return diffs
             
             # Concatenate along the channel dimension (dim=1)
             # Resulting shape: (T, 6, H, W)

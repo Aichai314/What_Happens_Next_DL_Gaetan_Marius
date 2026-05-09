@@ -78,8 +78,8 @@ def inspect_checkpoint(ckpt_path: str):
                     if not isinstance(config["model"], dict):
                         config["model"] = {}
                     old_name = config["model"].get("name", "Not Found")
-                    config["model"]["model_size"] = 34
-                    print(f"▶ Changed model.name from '{old_name}' to '{34}'")
+                    config["model"]["pursue_from"] = None
+                    print(f"▶ Changed model.name from '{old_name}' to '{config['model']['name']}'")
                     
                     # Save the modified checkpoint
                     torch.save(ckpt, path)

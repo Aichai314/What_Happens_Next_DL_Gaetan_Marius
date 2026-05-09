@@ -188,3 +188,63 @@ class ConvNeXtTSMTransformer(nn.Module):
             {"params": other_params, "lr": base_lr},
             {"params": backbone_params, "lr": base_lr * backbone_lr_factor},
         ]
+
+class ConvNeXtTSMPure(nn.Module):
+    def __init__(
+        self,
+        num_classes: int,
+        num_frames: int,
+        in_channels: int = 6, # 6-Channel Early Differencing!
+        fold_div: int = 8,
+    ) -> None:
+        super().__init__()
+        self.num_frames = num_frames
+
+        # 1. Load ConvNeXt WITHOUT pretraining
+        cnxt = tv_models.convnext_tiny(weights=None)
+
+        # 2. STEM SURGERY: Modify the 4x4 patchify stem for 6 channels
+        # ConvNeXt-Tiny stem is in cnxt.features[0][0]
+        original_stem = cnxt.features[0][0]
+        cnxt.features[0][0] = nn.Conv2d(
+            in_channels, 
+            original_stem.out_channels, 
+            kernel_size=original_stem.kernel_size, 
+            stride=original_stem.stride
+        )
+
+        # 3. TSM INJECTION
+        for stage_idx in (1, 3, 5, 7):
+            cnxt.features[stage_idx] = _wrap_stage(
+                cnxt.features[stage_idx],  
+                num_frames,
+                fold_div,
+            )
+
+        self.features = cnxt.features   
+        self.avgpool = cnxt.avgpool     
+        self.norm = cnxt.classifier[0]  
+        self.flatten = cnxt.classifier[1]  
+        
+        # 4. SIMPLE CLASSIFIER (No Transformer)
+        self.head = nn.Linear(768, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, C, H, W) -> Assume Early Fusion happens before this, 
+        # so x is actually (B, T, 6, H, W)
+        b, t, c, h, w = x.shape
+
+        # Fold time into batch for 2D CNN
+        feats = self.features(x.view(b * t, c, h, w)) 
+        feats = self.avgpool(feats)    
+        feats = self.norm(feats)       
+        feats = self.flatten(feats)    # (B*T, 768)
+
+        # Reshape back to (B, T, 768)
+        feats = feats.view(b, t, -1)
+
+        # 5. PURE TEMPORAL AVERAGE POOLING
+        # Average the features across the 4 frames
+        pooled = feats.mean(dim=1)     # (B, 768)
+
+        return self.head(pooled)

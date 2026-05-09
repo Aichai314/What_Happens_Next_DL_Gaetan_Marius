@@ -8,3 +8,4 @@ model:
   num_layers: 2
   dropout: 0.1
   fold_div: 8
+  transformer: true

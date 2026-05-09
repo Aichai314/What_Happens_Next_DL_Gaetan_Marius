@@ -1,0 +1,32 @@
+# @package _global_
+# Timesformer Tiny  —  Track A
+defaults:
+  - override /model: timesformer_baseline
+
+model:
+  pretrained: false
+  dropout: 0.2
+
+training:
+  augmentation: true
+  mixup_alpha: 0.4
+  epochs: 100
+  batch_size: 256      # 40% margin for safety
+  num_workers: 12
+  lr: 2e-4
+  optimizer: adamw
+  weight_decay: 5e-2 
+  scheduler: warmup_cosine
+  warmup_epochs: 10
+  label_smoothing: 0.15
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_timesformer.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_timesformer.pt
+  # resume_from: ${hydra:runtime.cwd}/latest_model_timesformer.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.4
+  blur_prob: 0.2
