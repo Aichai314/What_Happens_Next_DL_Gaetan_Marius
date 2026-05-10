@@ -43,6 +43,7 @@ from models.efficientnet_tsm import EfficientNet_TSM
 from models.first_cnn import FirstCNN
 from models.convnext_tsm_transformer import ConvNeXtTSMTransformer, ConvNeXtTSMPure
 from models.mobilenet_tsm import MobileNetV2_TSM
+from models.new_trn import TRNNew
 from models.timesformer_tiny import TimeSformerTiny
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet import TSMBaseline
@@ -138,6 +139,13 @@ def build_model(cfg: DictConfig) -> nn.Module:
         )
     if name == "trn_baseline":
         return TRN(
+            model_cfg = cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+        )
+    if name == "new_trn":
+        return TRNNew(
             model_cfg = cfg.model,
             num_classes=num_classes,
             num_frames=num_frames,

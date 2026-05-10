@@ -62,7 +62,7 @@ def inspect_checkpoint(ckpt_path: str):
             pprint.pprint(config)
 
     # Modify config.model.name if provided
-    if False:
+    if True:
         print("\n" + "="*50)
         print(" 🔧 MODIFYING CONFIG")
         print("="*50)
@@ -78,7 +78,7 @@ def inspect_checkpoint(ckpt_path: str):
                     if not isinstance(config["model"], dict):
                         config["model"] = {}
                     old_name = config["model"].get("name", "Not Found")
-                    config["model"]["pursue_from"] = None
+                    config["model"]["new_tsm"] = True
                     print(f"▶ Changed model.name from '{old_name}' to '{config['model']['name']}'")
                     
                     # Save the modified checkpoint

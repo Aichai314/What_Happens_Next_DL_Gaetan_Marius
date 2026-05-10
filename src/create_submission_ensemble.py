@@ -165,8 +165,12 @@ def main(cfg: DictConfig) -> None:
         #"checkpoints/mobilenet_6channels_37-58.pt",
         "checkpoints/efficientnet_6channels_39-78.pt",
         "checkpoints/efficientnet_attn_40-79.pt",
-        "best_model_efficientnet_spatial_40-96.pt",
+        "checkpoints/efficientnet_spatial_40-96.pt",
+        "checkpoints/best_model_cnn_lstm_31-71.pt",
+        "checkpoints/best_model_trn_32-90.pt",
+        "checkpoints/efficientnet_tdm_39-87.pt",
     ]
+
 
     # PHASE 1: Train the Meta-Learner (Logistic Regression)
     print("\n" + "="*50)

@@ -147,14 +147,14 @@ def _optimize_xgboost_hyperparams_optuna(
     def objective(trial: optuna.Trial) -> float:
         # Suggest hyperparameters
         params = {
-            'max_depth': 2,  # Fixed to prevent overfitting on high-dimensional meta-features
+            'max_depth': trial.suggest_int('max_depth', 2, 4),
             'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
-            'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+            'n_estimators': trial.suggest_int('n_estimators', 100, 300),
             'subsample': trial.suggest_float('subsample', 0.5, 0.8),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.7),
-            'min_child_weight': trial.suggest_int('min_child_weight', 5, 20),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 0.8),
+            'min_child_weight': trial.suggest_int('min_child_weight', 5, 30),
             # Force L2 and L1 regularization not to be too low to prevent overfitting on validation set
-            'lambda': trial.suggest_float('lambda', 5.0, 20.0),
+            'lambda': trial.suggest_float('lambda', 5.0, 30.0),
             'alpha': trial.suggest_float('alpha', 1.0, 5.0),
             'early_stopping_rounds': 30,
         }
@@ -421,7 +421,7 @@ def evaluate_and_stack_n_models(
             # print("\nUsing default hyperparameters (no Bayesian optimization)")
             print("\nUsing stored hyperparameters from previous Bayesian optimization (+ regularized a little more for safety)")
             # Bayesian optim parameters:
-            meta_model = _create_xgboost_model({'learning_rate': 0.09490375133436252, 'n_estimators': 181, 'subsample': 0.6144989878981494, 'colsample_bytree': 0.38954458665965014, 'min_child_weight': 5, 'lambda': 11.972041593460991, 'alpha': 3.105643914787689})
+            meta_model = _create_xgboost_model({'learning_rate': 0.09949269300375387, 'n_estimators': 181, 'subsample': 0.706441323736157, 'colsample_bytree': 0.6507684455172424, 'min_child_weight': 14, 'lambda': 27.36454008492742, 'alpha': 2.2069984738604624})
             print(f"Default Hyperparameters:")
             print(f"   max_depth: 4")
             print(f"   learning_rate: 0.04")
@@ -514,7 +514,10 @@ def main(cfg: DictConfig) -> None:
         #"checkpoints/mobilenet_6channels_37-58.pt",
         "checkpoints/efficientnet_6channels_39-78.pt",
         "checkpoints/efficientnet_attn_40-79.pt",
-        "best_model_efficientnet_spatial_40-96.pt",
+        "checkpoints/efficientnet_spatial_40-96.pt",
+        "checkpoints/best_model_cnn_lstm_31-71.pt",
+        "checkpoints/best_model_trn_32-90.pt",
+        "checkpoints/efficientnet_tdm_39-87.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())
@@ -540,25 +543,25 @@ def main(cfg: DictConfig) -> None:
     # Faster than Bayesian optimization, uses good defaults
     # On first run: computes and caches logits (~10 min)
     # On subsequent runs: loads from cache (~1 min)
-    meta_model, _ = evaluate_and_stack_n_models(
-        ckpt_paths=my_models,
-        val_dir=val_dir,
-        meta_learner='xgboost',
-        use_bayesian_optimization=False,
-        use_cache=True  # Set to False to recompute logits
-    )
-    
-    # Example 3: XGBoost with Bayesian Optimization (find best hyperparams)
-    # Slower but can improve accuracy by optimizing for your specific ensemble
-    # Runtime: ~45 minutes for 50 trials with 5-fold CV (after logits are cached)
     # meta_model, _ = evaluate_and_stack_n_models(
     #     ckpt_paths=my_models,
     #     val_dir=val_dir,
     #     meta_learner='xgboost',
-    #     use_bayesian_optimization=True,
-    #     bayesian_optimization_trials=75,
-    #     use_cache=True
+    #     use_bayesian_optimization=False,
+    #     use_cache=True  # Set to False to recompute logits
     # )
+    
+    # Example 3: XGBoost with Bayesian Optimization (find best hyperparams)
+    # Slower but can improve accuracy by optimizing for your specific ensemble
+    # Runtime: ~45 minutes for 50 trials with 5-fold CV (after logits are cached)
+    meta_model, _ = evaluate_and_stack_n_models(
+        ckpt_paths=my_models,
+        val_dir=val_dir,
+        meta_learner='xgboost',
+        use_bayesian_optimization=True,
+        bayesian_optimization_trials=75,
+        use_cache=True
+    )
 
 if __name__ == "__main__":
     main()
