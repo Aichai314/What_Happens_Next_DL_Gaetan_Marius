@@ -9,7 +9,7 @@ from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 import torchvision.models as tv_models
-from torchvision.models.mobilenetv2 import InvertedResidual
+from torchvision.models.efficientnet import MBConv
 
 class TemporalShift(nn.Module):
     """Shift 1/fold_div channels forward and 1/fold_div channels backward in time."""
@@ -34,7 +34,7 @@ class TemporalShift(nn.Module):
         return out.view(bt, c, h, w)
 
 
-class MobileNetV2_TSM(nn.Module):
+class EfficientNet_TSM(nn.Module):
     def __init__(
         self,
         model_cfg: DictConfig,
@@ -49,13 +49,13 @@ class MobileNetV2_TSM(nn.Module):
         fold_div = int(model_cfg.get("fold_div", 8))
         in_channels = int(model_cfg.get("in_channels", 3))
 
-        # 1. Load MobileNetV2 WITHOUT pretraining (Track A Rules)
-        weights = None if not pretrained else tv_models.MobileNet_V2_Weights.DEFAULT
-        self.backbone = tv_models.mobilenet_v2(weights=weights)
+        # 1. Load EfficientNet WITHOUT pretraining (Track A Rules)
+        weights = None if not pretrained else tv_models.EfficientNet_B0_Weights.DEFAULT
+        self.backbone = tv_models.efficientnet_b0(weights=weights)
 
         # 2. STEM SURGERY
         if in_channels != 3:
-            # MobileNetV2's stem is a Conv2dNormActivation block.
+            # EfficientNet's stem is a Conv2dNormActivation block.
             # We need to replace the very first Conv2d layer.
             original_conv = self.backbone.features[0][0]
             # Replace it with a 6-channel version, keeping stride and padding identical
@@ -69,20 +69,21 @@ class MobileNetV2_TSM(nn.Module):
             )
 
         # 3. TSM INJECTION (The "Physics Engine")
-        # We iterate through the MobileNet features and inject TSM right 
-        # before every InvertedResidual block.
         for idx, module in enumerate(self.backbone.features):
-            if isinstance(module, InvertedResidual):
-                self.backbone.features[idx] = nn.Sequential(
-                    TemporalShift(num_frames, fold_div),
-                    module
-                )
+            # EfficientNet groups MBConv blocks inside Sequentials
+            if isinstance(module, nn.Sequential):
+                for sub_idx, sub_module in enumerate(module):
+                    if isinstance(sub_module, MBConv):
+                        module[sub_idx] = nn.Sequential(
+                            TemporalShift(num_frames, fold_div),
+                            sub_module
+                        )
 
         # 4. SIMPLE CLASSIFIER HEAD
-        # MobileNetV2 ends with 1280 channels
+        # EfficientNet ends with 1280 channels
         self.head = nn.Sequential(
             nn.Dropout(p=dropout), # Slight dropout to prevent overfitting
-            nn.Linear(self.backbone.last_channel, num_classes)
+            nn.Linear(self.backbone.classifier[1].in_features, num_classes)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

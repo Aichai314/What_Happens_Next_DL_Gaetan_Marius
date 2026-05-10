@@ -159,10 +159,13 @@ def main(cfg: DictConfig) -> None:
         #"checkpoints/cnn_lstm_6channels_35-20.pt",
         "checkpoints/convnext_best_27-04.pt",
         "checkpoints/timesformer_best_24-33.pt",
-        "checkpoints/mobilenet_spatial_expert_38-09.pt",
+        #"checkpoints/mobilenet_spatial_expert_38-09.pt",
         "checkpoints/mobilenet_motion_expert_33-92.pt",
         #"checkpoints/tsm_tdm_6channels_36_28.pt",
         #"checkpoints/mobilenet_6channels_37-58.pt",
+        "checkpoints/efficientnet_6channels_39-78.pt",
+        "checkpoints/efficientnet_attn_40-79.pt",
+        "best_model_efficientnet_spatial_40-96.pt",
     ]
 
     # PHASE 1: Train the Meta-Learner (Logistic Regression)
@@ -174,7 +177,7 @@ def main(cfg: DictConfig) -> None:
         my_models,
         str(val_dir),
         meta_learner='xgboost',
-        use_bayesian_optimization=True,
+        use_bayesian_optimization=False,
     )
 
     # PHASE 2: Discover Test Videos using create_submission logic[cite: 5]

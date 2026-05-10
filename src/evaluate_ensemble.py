@@ -147,7 +147,7 @@ def _optimize_xgboost_hyperparams_optuna(
     def objective(trial: optuna.Trial) -> float:
         # Suggest hyperparameters
         params = {
-            'max_depth': trial.suggest_int('max_depth', 1, 3), # Keep trees shallow to prevent overfitting on validation set
+            'max_depth': 2,  # Fixed to prevent overfitting on high-dimensional meta-features
             'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
             'n_estimators': trial.suggest_int('n_estimators', 50, 200),
             'subsample': trial.suggest_float('subsample', 0.5, 0.8),
@@ -156,6 +156,7 @@ def _optimize_xgboost_hyperparams_optuna(
             # Force L2 and L1 regularization not to be too low to prevent overfitting on validation set
             'lambda': trial.suggest_float('lambda', 5.0, 20.0),
             'alpha': trial.suggest_float('alpha', 1.0, 5.0),
+            'early_stopping_rounds': 30,
         }
         
         model = _create_xgboost_model(params)
@@ -420,7 +421,7 @@ def evaluate_and_stack_n_models(
             # print("\nUsing default hyperparameters (no Bayesian optimization)")
             print("\nUsing stored hyperparameters from previous Bayesian optimization (+ regularized a little more for safety)")
             # Bayesian optim parameters:
-            meta_model = _create_xgboost_model()
+            meta_model = _create_xgboost_model({'learning_rate': 0.09490375133436252, 'n_estimators': 181, 'subsample': 0.6144989878981494, 'colsample_bytree': 0.38954458665965014, 'min_child_weight': 5, 'lambda': 11.972041593460991, 'alpha': 3.105643914787689})
             print(f"Default Hyperparameters:")
             print(f"   max_depth: 4")
             print(f"   learning_rate: 0.04")
@@ -441,7 +442,7 @@ def evaluate_and_stack_n_models(
         cv_scores = numpy.array(cv_scores_list)
         
         # Calculate the magical "Blind Run" target
-        optimal_trees = int(numpy.mean(best_iters))
+        optimal_trees = int(numpy.mean(best_iters) * 1.1)  # Add 10% buffer to prevent underfitting
         print(f"\n🧠 Calculated Optimal Trees from CV: {optimal_trees}")
     else:
         # Logistic Regression doesn't use early stopping, so standard CV is fine
@@ -507,10 +508,13 @@ def main(cfg: DictConfig) -> None:
         #"checkpoints/cnn_lstm_6channels_35-20.pt",
         "checkpoints/convnext_best_27-04.pt",
         "checkpoints/timesformer_best_24-33.pt",
-        "checkpoints/mobilenet_spatial_expert_38-09.pt",
+        #"checkpoints/mobilenet_spatial_expert_38-09.pt",
         "checkpoints/mobilenet_motion_expert_33-92.pt",
         #"checkpoints/tsm_tdm_6channels_36_28.pt",
         #"checkpoints/mobilenet_6channels_37-58.pt",
+        "checkpoints/efficientnet_6channels_39-78.pt",
+        "checkpoints/efficientnet_attn_40-79.pt",
+        "best_model_efficientnet_spatial_40-96.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())
@@ -552,7 +556,7 @@ def main(cfg: DictConfig) -> None:
     #     val_dir=val_dir,
     #     meta_learner='xgboost',
     #     use_bayesian_optimization=True,
-    #     bayesian_optimization_trials=50,
+    #     bayesian_optimization_trials=75,
     #     use_cache=True
     # )
 

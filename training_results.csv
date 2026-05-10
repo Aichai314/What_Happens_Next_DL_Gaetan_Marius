@@ -68,3 +68,6 @@ timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lst
 2026-05-08 19:04:43,192.3,mobilenet,False,33,,,,,,50,64,0.001,adamw,warmup_cosine,4,0.2,42,0.3392,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_mobilenet.pt
 2026-05-08 19:10:42,198.0,convnext_tsm,False,33,,,,,,40,64,0.001,adamw,warmup_cosine,4,0.2,42,0.2704,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_convnext.pt
 2026-05-09 01:19:10,139.3,mobilenet,False,33,,,,,0.3,50,64,0.001,adamw,warmup_cosine,4,0.2,42,0.3758,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_mobilenet.pt
+2026-05-09 22:05:20,249.0,efficientnet,False,33,,,,,0.2,50,64,0.001,adamw,warmup_cosine,4,0.2,42,0.3978,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_efficientnet.pt
+2026-05-09 22:16:08,70.9,efficientnet_attention,False,33,,,,,0.3,15,64,1e-05,adamw,warmup_cosine,4,0.2,42,0.4079,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/attn_stage1_best.pt
+2026-05-10 00:32:21,187.3,efficientnet,False,33,,,,,0.2,40,64,0.001,adamw,warmup_cosine,4,0.2,42,0.4096,/users/eleves-b/2024/gaetan.degot-silvestre/DL/What_Happens_Next_DL_Gaetan_Marius/best_model_efficientnet_spatial.pt

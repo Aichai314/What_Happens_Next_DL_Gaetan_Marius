@@ -38,6 +38,8 @@ from models.cnn_baseline import CNNBaseline
 from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
+from models.efficientnet_attention import EfficientNetAttention
+from models.efficientnet_tsm import EfficientNet_TSM
 from models.first_cnn import FirstCNN
 from models.convnext_tsm_transformer import ConvNeXtTSMTransformer, ConvNeXtTSMPure
 from models.mobilenet_tsm import MobileNetV2_TSM
@@ -215,11 +217,26 @@ def build_model(cfg: DictConfig) -> nn.Module:
         )
     if name == "mobilenet":
         return MobileNetV2_TSM(
+            model_cfg=cfg.model,
             num_classes=num_classes,
             num_frames=num_frames,
             pretrained=pretrained,
-            fold_div=int(cfg.model.get("fold_div", 8)),
-            in_channels=int(cfg.model.get("in_channels", 3)),
+            dropout=float(cfg.model.get("dropout", 0.2))
+        )
+    if name == "efficientnet":
+        return EfficientNet_TSM(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+            dropout=float(cfg.model.get("dropout", 0.2))
+        )
+    if name == "efficientnet_attention":
+        return EfficientNetAttention(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
             dropout=float(cfg.model.get("dropout", 0.2))
         )
 
