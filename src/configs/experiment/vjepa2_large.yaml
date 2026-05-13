@@ -1,0 +1,33 @@
+# @package _global_
+# V-JEPA 2 ViT-Large, already fine-tuned on SSv2 by Meta.
+# We swap the 174-class head for our 33-class head and gently re-tune.
+# Designed as a maximally complementary expert to VideoMAE for the XGBoost ensemble.
+#
+# python src/train.py experiment=vjepa2_large
+defaults:
+  - override /model: vjepa2_large
+
+training:
+  checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_vjepa2_large.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_vjepa2_large.pt
+  epochs: 6
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  lr: 0.0001
+  backbone_lr_factor: 0.01
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: cosine
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.2
+
+dataset:
+  num_frames: 16
+  image_size: 256
+
+augmentation:
+  temporal_drop_prob: 0.2
+  grayscale_prob: 0.3
+  blur_prob: 0.3

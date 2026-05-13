@@ -1,0 +1,38 @@
+# @package _global_
+# SlowFast R50 pretrained on Kinetics-400, fine-tuned for 33 classes.
+# Two-pathway 3D-CNN: slow path (T/alpha frames) for appearance, fast path (T frames) for motion.
+# Designed as a maximally decorrelated expert from VideoMAE for ensemble stacking.
+#
+# python src/train.py experiment=slowfast_r50
+defaults:
+  - override /model: slowfast_r50
+
+training:
+  checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_slowfast_r50.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_slowfast_r50.pt
+  epochs: 15
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  lr: 0.0003
+  backbone_lr_factor: 0.05
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: cosine
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.2
+
+dataset:
+  # num_frames must be a multiple of 4 (alpha): slow gets num_frames/4 frames.
+  # 8 -> slow=2, fast=8 — small two-pathway model, Kaggle test (4 frames) gets replicated to 8.
+  num_frames: 8
+
+augmentation:
+  temporal_drop_prob: 0.3
+  grayscale_prob: 0.3
+  blur_prob: 0.3
+  # Enable random temporal subsampling for SSv2 13-frame training data:
+  # at each epoch, draw 4 frames at random from the 13 available per video.
+  # Set false (or override on CLI) when running on machines without SSv2 frames.
+  random_temporal_sampling: true

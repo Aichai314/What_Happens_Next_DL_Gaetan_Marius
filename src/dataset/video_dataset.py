@@ -20,6 +20,7 @@ Each __getitem__ returns:
 
 from __future__ import annotations
 
+import random
 import re
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -111,6 +112,27 @@ def _pick_frame_indices(num_available: int, num_frames: int) -> List[int]:
     return indices
 
 
+def _pick_frame_indices_random(num_available: int, num_frames: int) -> List[int]:
+    """
+    Random temporal sampling: pick num_frames distinct indices uniformly at random
+    from [0, num_available - 1], then sort to preserve temporal order.
+
+    Used as a training-time augmentation when extra frames are available
+    (e.g. 13 SSv2 frames per video vs the challenge's 4). Each epoch sees a different
+    subset of frames, regularising temporal feature learning.
+
+    Falls back to deterministic uniform sampling when num_available <= num_frames,
+    so enabling the flag is safe even on machines with only the 4-frame challenge data.
+    """
+    if num_available <= 0:
+        raise ValueError("Video has no frames.")
+    if num_frames <= 0:
+        raise ValueError("num_frames must be positive.")
+    if num_available <= num_frames:
+        return _pick_frame_indices(num_available, num_frames)
+    return sorted(random.sample(range(num_available), num_frames))
+
+
 class VideoFrameDataset(Dataset):
     def __init__(
         self,
@@ -118,6 +140,7 @@ class VideoFrameDataset(Dataset):
         num_frames: int,
         transform: Callable[[Image.Image], torch.Tensor],
         sample_list: Optional[List[Tuple[Path, int]]] = None,
+        random_temporal_sampling: bool = False,
     ) -> None:
         """
         Args:
@@ -125,10 +148,14 @@ class VideoFrameDataset(Dataset):
             num_frames: T in the returned tensor (T, C, H, W).
             transform: Applied independently to each PIL image (typically Resize + ToTensor + Normalize).
             sample_list: Optional pre-built list of (video_dir, label). Use for train/val splits.
+            random_temporal_sampling: If True, randomly subsample num_frames indices when
+                more are available (training-time augmentation). Always False for val/test
+                to keep evaluation deterministic. No-op when num_available <= num_frames.
         """
         self.root_dir = Path(root_dir)
         self.num_frames = num_frames
         self.transform = transform
+        self.random_temporal_sampling = random_temporal_sampling
 
         if sample_list is None:
             self.samples = collect_video_samples(self.root_dir)
@@ -141,7 +168,10 @@ class VideoFrameDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         video_dir, label = self.samples[index]
         frame_paths = _list_frame_paths(video_dir)
-        indices = _pick_frame_indices(len(frame_paths), self.num_frames)
+        if self.random_temporal_sampling:
+            indices = _pick_frame_indices_random(len(frame_paths), self.num_frames)
+        else:
+            indices = _pick_frame_indices(len(frame_paths), self.num_frames)
 
         pil_frames: List[Image.Image] = []
         for frame_index in indices:

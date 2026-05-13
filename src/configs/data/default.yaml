@@ -17,3 +17,7 @@ augmentation:
   temporal_drop_prob: 0.1
   grayscale_prob: 0.2
   blur_prob: 0.2
+  # Opt-in random temporal subsampling when extra frames are available
+  # (e.g. SSv2 13-frame extraction vs the challenge 4-frame data).
+  # No-op when num_available <= num_frames, so safe to leave true.
+  random_temporal_sampling: false

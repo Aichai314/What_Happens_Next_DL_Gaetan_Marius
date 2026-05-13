@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed

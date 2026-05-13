@@ -31,8 +31,9 @@ import re
 import sys
 import unicodedata
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 def _import_cv2():
@@ -209,6 +210,8 @@ def normalize_class_name_for_matching(name: str) -> str:
     with the dataset).
     """
     s = unicodedata.normalize("NFKC", name.strip())
+    # Strip [placeholder] brackets: "Closing [something]" -> "Closing something"
+    s = re.sub(r"\[([^\]]*)\]", r"\1", s)
     # Fullwidth / compatibility commas → ASCII (common copy-paste issue).
     for ch in ("\uff0c", "\ufe50", "\ufe10"):
         s = s.replace(ch, ",")
@@ -462,7 +465,7 @@ def find_video_file(video_dir: Path, video_id: str) -> Path | None:
 
 
 def load_selected_classes(path: Path) -> List[str]:
-    """Load class names from a text file (one per line) or a JSON list of strings."""
+    """Load class names from a text file (one per line), a JSON list, or a JSON dict (keys used)."""
     text = path.read_text(encoding="utf-8").strip()
     if not text:
         return []
@@ -471,6 +474,11 @@ def load_selected_classes(path: Path) -> List[str]:
         if not isinstance(data, list):
             raise ValueError("JSON selected-classes file must be a list of strings.")
         return [str(x).strip() for x in data]
+    if text.startswith("{"):
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("JSON selected-classes file must be a dict or list.")
+        return [str(k).strip() for k in data.keys()]
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
@@ -596,7 +604,75 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If a video folder already has frame_000.jpg, skip re-extraction.",
     )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Number of parallel worker processes for frame extraction.",
+    )
     return p.parse_args()
+
+
+def _extract_task(args: Tuple) -> Tuple[bool, str]:
+    """Worker function for parallel extraction. Returns (ok, video_id)."""
+    vpath, vid_dir, num_frames, first_percent, resize_wh, skip_existing = args
+    if skip_existing and (vid_dir / "frame_000.jpg").is_file():
+        return "skip", str(vid_dir)
+    if vid_dir.exists():
+        for old in vid_dir.glob("frame_*.jpg"):
+            old.unlink()
+    ok = extract_frames(
+        vpath, vid_dir,
+        num_frames=num_frames,
+        first_percent=first_percent,
+        resize_wh=resize_wh,
+    )
+    return ("ok" if ok else "fail"), str(vpath)
+
+
+def _run_extraction(
+    pairs: List[Tuple[str, str]],
+    split_name: str,
+    split_dir: Path,
+    class_to_idx: Dict[str, int],
+    video_dir: Path,
+    num_frames: int,
+    first_percent: float,
+    resize_wh: Tuple[int, int],
+    skip_existing: bool,
+    workers: int,
+) -> Tuple[int, int, int]:
+    """Run parallel frame extraction for one split. Returns (ok, skip, fail)."""
+    tasks = []
+    for vid, cls in pairs:
+        idx = class_to_idx[cls]
+        class_dir_name = _safe_subdir_name(cls, idx)
+        vid_dir = split_dir / class_dir_name / f"video_{vid}"
+        vpath = find_video_file(video_dir, vid)
+        if vpath is None:
+            print(f"Warning: no video file for id={vid} in {video_dir}", file=sys.stderr)
+            tasks.append(None)
+            continue
+        tasks.append((vpath, vid_dir, num_frames, first_percent, resize_wh, skip_existing))
+
+    ok = skip = fail = 0
+    valid_tasks = [t for t in tasks if t is not None]
+    fail += len(tasks) - len(valid_tasks)
+
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_extract_task, t): t for t in valid_tasks}
+        for i, fut in enumerate(as_completed(futures), 1):
+            status, _ = fut.result()
+            if status == "ok":
+                ok += 1
+            elif status == "skip":
+                skip += 1
+            else:
+                fail += 1
+            if i % 500 == 0 or i == len(valid_tasks):
+                print(f"  [{split_name}] {i}/{len(valid_tasks)} — ok={ok} skip={skip} fail={fail}")
+
+    return ok, skip, fail
 
 
 def main() -> None:
@@ -742,155 +818,55 @@ def main() -> None:
         file=sys.stderr,
     )
 
-    splits: List[Tuple[str, List[Tuple[str, str]]]] = [
-        ("train", train_pairs),
-        ("val", val_pairs),
-    ]
-    stats_ok = 0
-    stats_skip = 0
-    stats_bad = 0
+    stats_ok = stats_skip = stats_bad = 0
 
-    for split_name, split_pairs in splits:
-        split_dir = out_root / split_name
-        for rank, (vid, cls) in enumerate(split_pairs):
-            idx = class_to_idx[cls]
-            class_dir_name = _safe_subdir_name(cls, idx)
-            vid_dir = split_dir / class_dir_name / f"video_{vid}"
-            if args.skip_existing and (vid_dir / "frame_000.jpg").is_file():
-                stats_skip += 1
-                continue
-
-            vpath = find_video_file(video_dir, vid)
-            if vpath is None:
-                print(
-                    f"Warning: no video file for id={vid} in {video_dir}",
-                    file=sys.stderr,
-                )
-                stats_bad += 1
-                continue
-
-            if vid_dir.exists():
-                # Remove partial / old frames for a clean re-run.
-                for old in vid_dir.glob("frame_*.jpg"):
-                    old.unlink()
-
-            ok = extract_frames(
-                vpath,
-                vid_dir,
-                num_frames=args.num_frames,
-                first_percent=args.first_percent,
-                resize_wh=resize_wh,
-            )
-            if ok:
-                stats_ok += 1
-            else:
-                print(
-                    f"Warning: failed to extract frames from {vpath} (corrupt or unsupported).",
-                    file=sys.stderr,
-                )
-                stats_bad += 1
-
-            if (rank + 1) % 100 == 0:
-                print(f"  [{split_name}] processed {rank + 1} / {len(split_pairs)} ...")
-
-    # Test split: either filtered by private test-answers.csv (class folders) or raw ids from test.json.
-    if test_pairs_labeled:
-        split_name = "test"
-        split_dir = out_root / split_name
-        print(
-            f"Extracting {len(test_pairs_labeled)} filtered test clips under {split_dir}/<class>/video_<id>/ ...",
-            file=sys.stderr,
+    for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
+        print(f"\nExtracting {len(split_pairs)} {split_name} clips with {args.workers} workers ...")
+        ok, skip, fail = _run_extraction(
+            split_pairs, split_name, out_root / split_name,
+            class_to_idx, video_dir,
+            args.num_frames, args.first_percent, resize_wh,
+            args.skip_existing, args.workers,
         )
-        for rank, (vid, cls) in enumerate(test_pairs_labeled):
-            idx = class_to_idx[cls]
-            class_dir_name = _safe_subdir_name(cls, idx)
-            vid_dir = split_dir / class_dir_name / f"video_{vid}"
-            if args.skip_existing and (vid_dir / "frame_000.jpg").is_file():
-                stats_skip += 1
-                continue
+        stats_ok += ok; stats_skip += skip; stats_bad += fail
 
-            vpath = find_video_file(video_dir, vid)
-            if vpath is None:
-                print(
-                    f"Warning: no video file for id={vid} in {video_dir}",
-                    file=sys.stderr,
-                )
-                stats_bad += 1
-                continue
-
-            if vid_dir.exists():
-                for old in vid_dir.glob("frame_*.jpg"):
-                    old.unlink()
-
-            ok = extract_frames(
-                vpath,
-                vid_dir,
-                num_frames=args.num_frames,
-                first_percent=args.first_percent,
-                resize_wh=resize_wh,
-            )
-            if ok:
-                stats_ok += 1
-            else:
-                print(
-                    f"Warning: failed to extract frames from {vpath} (corrupt or unsupported).",
-                    file=sys.stderr,
-                )
-                stats_bad += 1
-
-            if (rank + 1) % 100 == 0:
-                print(
-                    f"  [{split_name}] processed {rank + 1} / {len(test_pairs_labeled)} ..."
-                )
+    # Test split
+    if test_pairs_labeled:
+        print(f"\nExtracting {len(test_pairs_labeled)} test clips (labeled) with {args.workers} workers ...")
+        ok, skip, fail = _run_extraction(
+            test_pairs_labeled, "test", out_root / "test",
+            class_to_idx, video_dir,
+            args.num_frames, args.first_percent, resize_wh,
+            args.skip_existing, args.workers,
+        )
+        stats_ok += ok; stats_skip += skip; stats_bad += fail
 
     elif args.test_json is not None:
         test_ids = load_test_ids(args.test_json.expanduser().resolve())
-        split_name = "test"
-        split_dir = out_root / split_name
-        print(
-            f"Extracting {len(test_ids)} test clips (no labels) under {split_dir}/video_<id>/ ...",
-            file=sys.stderr,
-        )
-        for rank, vid in enumerate(test_ids):
+        split_dir = out_root / "test"
+        print(f"\nExtracting {len(test_ids)} test clips (unlabeled) with {args.workers} workers ...")
+        tasks = []
+        missing = 0
+        for vid in test_ids:
             vid_dir = split_dir / f"video_{vid}"
-            if args.skip_existing and (vid_dir / "frame_000.jpg").is_file():
-                stats_skip += 1
-                continue
-
             vpath = find_video_file(video_dir, vid)
             if vpath is None:
-                print(
-                    f"Warning: no video file for id={vid} in {video_dir}",
-                    file=sys.stderr,
-                )
-                stats_bad += 1
+                missing += 1
                 continue
-
-            if vid_dir.exists():
-                for old in vid_dir.glob("frame_*.jpg"):
-                    old.unlink()
-
-            ok = extract_frames(
-                vpath,
-                vid_dir,
-                num_frames=args.num_frames,
-                first_percent=args.first_percent,
-                resize_wh=resize_wh,
-            )
-            if ok:
-                stats_ok += 1
-            else:
-                print(
-                    f"Warning: failed to extract frames from {vpath} (corrupt or unsupported).",
-                    file=sys.stderr,
-                )
-                stats_bad += 1
-
-            if (rank + 1) % 500 == 0:
-                print(f"  [{split_name}] processed {rank + 1} / {len(test_ids)} ...")
+            tasks.append((vpath, vid_dir, args.num_frames, args.first_percent, resize_wh, args.skip_existing))
+        stats_bad += missing
+        with ProcessPoolExecutor(max_workers=args.workers) as ex:
+            futures = {ex.submit(_extract_task, t): t for t in tasks}
+            for i, fut in enumerate(as_completed(futures), 1):
+                status, _ = fut.result()
+                if status == "ok": stats_ok += 1
+                elif status == "skip": stats_skip += 1
+                else: stats_bad += 1
+                if i % 500 == 0 or i == len(tasks):
+                    print(f"  [test] {i}/{len(tasks)} — ok={stats_ok} skip={stats_skip} fail={stats_bad}")
 
     print(
-        f"Done. Extracted OK: {stats_ok}, skipped (existing): {stats_skip}, "
+        f"\nDone. Extracted OK: {stats_ok}, skipped (existing): {stats_skip}, "
         f"missing/failed: {stats_bad}. Output: {out_root}"
     )
 

@@ -1,0 +1,9 @@
+# @package _global_
+model:
+  name: slowfast_r50
+  num_classes: 33
+  pretrained: true
+  # alpha MUST be 4: pytorchvideo's pretrained SlowFast R50 has a fast->slow fusion
+  # conv with hardcoded stride=4. Slow pathway therefore receives num_frames/4 frames.
+  alpha: 4
+  dropout: 0.5

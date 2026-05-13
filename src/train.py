@@ -49,6 +49,8 @@ from models.vit_transformer import ViTTransformer
 from models.TSM_resnet import TSMBaseline
 from models.videomae_v2 import VideoMAEFinetune
 from models.videomae_large_kinetics import VideoMAELargeKineticsFinetune
+from models.vjepa2_large import VJEPA2LargeFinetune
+from models.slowfast_r50 import SlowFastR50Finetune
 from models.r2plus1d_baseline import R2Plus1DBaseline
 from models.vit_small import ViTSmallTransformer
 from models.trn_baseline import TRN
@@ -215,7 +217,15 @@ def build_model(cfg: DictConfig) -> nn.Module:
             llrd=float(cfg.model.get("llrd", 0.75)),
             num_frames=num_frames,
         )
-    
+
+    if name == "slowfast_r50":
+        return SlowFastR50Finetune(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            alpha=int(cfg.model.get("alpha", 4)),
+            dropout=float(cfg.model.get("dropout", 0.5)),
+        )
+
     if name == "timesformer":
         return TimeSformerTiny(
             model_cfg=cfg.model,
@@ -246,6 +256,14 @@ def build_model(cfg: DictConfig) -> nn.Module:
             num_frames=num_frames,
             pretrained=pretrained,
             dropout=float(cfg.model.get("dropout", 0.2))
+        )
+
+    if name == "vjepa2_large":
+        return VJEPA2LargeFinetune(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            llrd=float(cfg.model.get("llrd", 0.85)),
+            head_dropout=float(cfg.model.get("head_dropout", 0.5)),
         )
 
     raise ValueError(f"Unknown model.name: {name}")
@@ -357,7 +375,8 @@ def main(cfg: DictConfig) -> None:
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
     
     wandb.init(
-        project="what-happens-next-video", 
+        project="what-happens-next-video",
+        name=cfg.get("run_name", None),
         config=wandb_config # Log your learning rate, batch size, etc.
     )
 
@@ -386,23 +405,30 @@ def main(cfg: DictConfig) -> None:
 
     use_imagenet_norm = bool(cfg.model.pretrained)
     use_augmentation = bool(cfg.training.get("augmentation", False))
+    image_size = int(cfg.dataset.get("image_size", 224))
     if use_augmentation:
-        train_transform = VideoTransform(cfg, is_training=True,  use_imagenet_norm=use_imagenet_norm)
+        train_transform = VideoTransform(cfg, is_training=True,  use_imagenet_norm=use_imagenet_norm, image_size=image_size)
     else:
-        train_transform = build_transforms(is_training=True, use_imagenet_norm=use_imagenet_norm)
-    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm)
+        train_transform = build_transforms(is_training=True, use_imagenet_norm=use_imagenet_norm, image_size=image_size)
+    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm, image_size=image_size)
+
+    random_temporal_sampling = bool(
+        cfg.augmentation.get("random_temporal_sampling", False)
+    )
 
     train_dataset = VideoFrameDataset(
         root_dir=train_dir,
         num_frames=int(cfg.dataset.num_frames),
         transform=train_transform,
         sample_list=train_samples,
+        random_temporal_sampling=random_temporal_sampling,
     )
     val_dataset = VideoFrameDataset(
         root_dir=val_dir,
         num_frames=int(cfg.dataset.num_frames),
         transform=eval_transform,
         sample_list=val_samples,
+        random_temporal_sampling=False,
     )
 
     train_loader = DataLoader(

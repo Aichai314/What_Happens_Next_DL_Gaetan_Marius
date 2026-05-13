@@ -5,8 +5,8 @@ defaults:
   - override /model: videomae_large_kinetics
 
 training:
-  checkpoint_path: ${hydra:runtime.cwd}/checkpoints/best_model_videomae_large_kinetics.pt
-  latest_checkpoint_path: ${hydra:runtime.cwd}/checkpoints/latest_model_videomae_large_kinetics.pt
+  checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_videomae_large_kinetics.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_videomae_large_kinetics.pt
   epochs: 10
   batch_size: 8
   gradient_accumulation_steps: 4
@@ -14,8 +14,7 @@ training:
   backbone_lr_factor: 0.05
   optimizer: adamw
   weight_decay: 0.1
-  scheduler: warmup_cosine
-  warmup_epochs: 2
+  scheduler: cosine
   label_smoothing: 0.15
   augmentation: true
   num_workers: 4
