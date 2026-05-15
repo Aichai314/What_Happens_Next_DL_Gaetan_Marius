@@ -1,0 +1,43 @@
+# @package _global_
+# EfficientNet + TSM —  Track A
+# python src/train.py experiment=efficientnet_spatial
+defaults:
+  - override /model: efficientnet_baseline
+
+model:
+  name: efficientnet_custom
+  pretrained: false
+  fold_div: 8
+  in_channels: 3
+  dropout: 0.2
+  new_tsm: true
+  efficientnet_b1: false
+  backbone_path: ${hydra:runtime.cwd}/best_model_efficientnet_spatial_low_ov.pt
+  backbone_lr_factor: 0.1
+
+training:
+  augmentation: true
+  mixup_alpha: 0.2
+  epochs: 30
+  batch_size: 64
+  num_workers: 12
+  lr: 3e-4
+  optimizer: adamw
+  weight_decay: 2e-3
+  scheduler: warmup_cosine
+  warmup_epochs: 2
+  label_smoothing: 0.1
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet_tcn.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet_tcn.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_tcn.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.2
+  blur_prob: 0.15
+  erasing_prob: 0.1
+  rotation_prob: 0.15
+  rotation_degrees: 5.0

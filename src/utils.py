@@ -5,6 +5,7 @@ Small helpers: reproducibility, image transforms, and metric computation.
 from __future__ import annotations
 
 import random
+import math
 from pathlib import Path
 from typing import List, Tuple, Dict
 
@@ -122,6 +123,7 @@ class VideoTransform:
             self.color_jitter = transforms.ColorJitter(
                 brightness=0.4, contrast=0.4, saturation=0.3, hue=0.1
             )
+            self.max_rotation = float(cfg.augmentation.get("rotation_degrees", 10.0))
         
         self.use_frame_differencing = cfg.get("dataset", {}).get("use_frame_differencing", False)
         self.only_motion = cfg.get("dataset", {}).get("only_motion", False)
@@ -150,11 +152,27 @@ class VideoTransform:
             # CRITICAL: Add Gaussian Blur to destroy sharp background textures
             do_blur = random.random() < self.cfg.augmentation.blur_prob  # 50% de chance d'appliquer le flou
             blurer = transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 2.0))
+            angle = random.uniform(-self.max_rotation, self.max_rotation) if random.random() < self.cfg.augmentation.get("rotation_prob", 0.0) else 0.0
+            
+            # =========================================================
+            # NEW: EXPLICIT COLOR JITTER PARAMS (Consistent across clip)
+            # =========================================================
+            # brightness=0.4, contrast=0.4, saturation=0.3, hue=0.1
+            b_factor = random.uniform(0.6, 1.4)
+            c_factor = random.uniform(0.6, 1.4)
+            s_factor = random.uniform(0.7, 1.3)
+            h_factor = random.uniform(-0.1, 0.1)
+            
+            # PyTorch's ColorJitter randomly shuffles the order of application.
+            # We mimic that here to prevent bias.
+            jitter_order = [0, 1, 2, 3]
+            random.shuffle(jitter_order)
 
         result: List[torch.Tensor] = []
         for img in frames:
             if self.is_training:
                 # Spatial (identique pour toutes les frames)
+                img = TF.rotate(img, angle, fill=[128, 128, 128])
                 img = TF.resized_crop(  
                     img, crop_i, crop_j, crop_h, crop_w,
                     [self.image_size, self.image_size],
@@ -164,16 +182,39 @@ class VideoTransform:
                 if do_blur:
                     img = blurer(img)
                 
-                # Couleur (par frame)
-                img = self.color_jitter(img)
+                # =========================================================
+                # NEW: APPLY CONSISTENT COLOR JITTER
+                # =========================================================
+                if not do_gray: # Don't jitter color if we just made it grayscale
+                    for idx in jitter_order:
+                        if idx == 0: img = TF.adjust_brightness(img, b_factor)
+                        elif idx == 1: img = TF.adjust_contrast(img, c_factor)
+                        elif idx == 2: img = TF.adjust_saturation(img, s_factor)
+                        elif idx == 3: img = TF.adjust_hue(img, h_factor)
             else:
                 img = TF.resize(img, [self.image_size, self.image_size])  
 
-            tensor = TF.to_tensor(img)  
+            tensor = TF.to_tensor(img)
             tensor = TF.normalize(tensor, self.mean, self.std)
             result.append(tensor)
         
         stacked_frames = torch.stack(result)  # (T, 3, H, W)
+        
+        if self.is_training and random.random() < self.cfg.augmentation.get("erasing_prob", 0.0):
+            # Calculate the box size (e.g., between 2% and 10% of image area)
+            area = self.image_size * self.image_size
+            target_area = random.uniform(0.02, 0.1) * area
+            aspect_ratio = random.uniform(0.3, 3.3)
+            
+            h = int(round(math.sqrt(target_area * aspect_ratio)))
+            w = int(round(math.sqrt(target_area / aspect_ratio)))
+            
+            if h < self.image_size and w < self.image_size:
+                i = random.randint(0, self.image_size - h)
+                j = random.randint(0, self.image_size - w)
+                
+                # Apply the EXACT same black box across all time steps
+                stacked_frames[:, :, i:i+h, j:j+w] = 0.0 # or use the mean values
         
         # =========================================================
         # EXPLICIT FRAME DIFFERENCING

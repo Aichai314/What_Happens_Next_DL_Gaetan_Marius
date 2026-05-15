@@ -9,22 +9,28 @@ model:
   fold_div: 8
   in_channels: 3
   dropout: 0.2
+  new_tsm: true
+  efficientnet_b3: true
+  # use_tcn: true
+  # tcn_insert_after: 5
+  # tcn_kernel_size: 3
+  # tcn_num_layers: 2
 
 training:
   augmentation: true
   mixup_alpha: 0.4
-  epochs: 100
-  batch_size: 64
+  epochs: 40
+  batch_size: 32
   num_workers: 12
-  lr: 3e-4
+  lr: 1e-3
   optimizer: adamw
   weight_decay: 1e-1
   scheduler: warmup_cosine
-  warmup_epochs: 10
+  warmup_epochs: 5
   label_smoothing: 0.2
   checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet_spatial.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet_spatial.pt
-  resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_spatial.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_save_spatial.pt
 
 dataset:
   num_frames: 4
@@ -32,4 +38,7 @@ dataset:
 augmentation:
   temporal_drop_prob: 0.1
   grayscale_prob: 0.3
-  blur_prob: 0.15
+  blur_prob: 0.5
+  erasing_prob: 0.3
+  rotation_prob: 0.3
+  rotation_degrees: 10.0

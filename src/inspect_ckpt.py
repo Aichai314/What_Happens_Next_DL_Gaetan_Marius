@@ -62,7 +62,7 @@ def inspect_checkpoint(ckpt_path: str):
             pprint.pprint(config)
 
     # Modify config.model.name if provided
-    if True:
+    if False:
         print("\n" + "="*50)
         print(" 🔧 MODIFYING CONFIG")
         print("="*50)

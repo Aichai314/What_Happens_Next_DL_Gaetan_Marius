@@ -147,11 +147,11 @@ def _optimize_xgboost_hyperparams_optuna(
     def objective(trial: optuna.Trial) -> float:
         # Suggest hyperparameters
         params = {
-            'max_depth': trial.suggest_int('max_depth', 2, 4),
+            'max_depth': trial.suggest_int('max_depth', 2, 3),
             'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
             'n_estimators': trial.suggest_int('n_estimators', 100, 300),
             'subsample': trial.suggest_float('subsample', 0.5, 0.8),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 0.8),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.75),
             'min_child_weight': trial.suggest_int('min_child_weight', 5, 30),
             # Force L2 and L1 regularization not to be too low to prevent overfitting on validation set
             'lambda': trial.suggest_float('lambda', 5.0, 30.0),
@@ -421,7 +421,7 @@ def evaluate_and_stack_n_models(
             # print("\nUsing default hyperparameters (no Bayesian optimization)")
             print("\nUsing stored hyperparameters from previous Bayesian optimization (+ regularized a little more for safety)")
             # Bayesian optim parameters:
-            meta_model = _create_xgboost_model({'learning_rate': 0.09949269300375387, 'n_estimators': 181, 'subsample': 0.706441323736157, 'colsample_bytree': 0.6507684455172424, 'min_child_weight': 14, 'lambda': 27.36454008492742, 'alpha': 2.2069984738604624})
+            meta_model = _create_xgboost_model({'learning_rate': 0.08525, 'n_estimators': 213, 'subsample': 0.62746, 'colsample_bytree': 0.4003, 'min_child_weight': 5, 'lambda': 5.32948, 'alpha': 4.2095})
             print(f"Default Hyperparameters:")
             print(f"   max_depth: 4")
             print(f"   learning_rate: 0.04")
@@ -515,9 +515,10 @@ def main(cfg: DictConfig) -> None:
         "checkpoints/efficientnet_6channels_39-78.pt",
         "checkpoints/efficientnet_attn_40-79.pt",
         "checkpoints/efficientnet_spatial_40-96.pt",
-        "checkpoints/best_model_cnn_lstm_31-71.pt",
-        "checkpoints/best_model_trn_32-90.pt",
-        "checkpoints/efficientnet_tdm_39-87.pt",
+        "checkpoints/efficientnetb3_40-93.pt",
+        # "checkpoints/best_model_cnn_lstm_31-71.pt",
+        # "checkpoints/best_model_trn_32-90.pt",
+        # "checkpoints/efficientnet_tdm_39-87.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())
@@ -559,7 +560,7 @@ def main(cfg: DictConfig) -> None:
         val_dir=val_dir,
         meta_learner='xgboost',
         use_bayesian_optimization=True,
-        bayesian_optimization_trials=75,
+        bayesian_optimization_trials=50,
         use_cache=True
     )
 

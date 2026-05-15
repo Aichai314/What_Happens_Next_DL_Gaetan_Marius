@@ -39,11 +39,14 @@ from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
 from models.efficientnet_attention import EfficientNetAttention
+from models.efficientnet_custom import EfficientNetTemporalHead
 from models.efficientnet_tsm import EfficientNet_TSM
 from models.first_cnn import FirstCNN
 from models.convnext_tsm_transformer import ConvNeXtTSMTransformer, ConvNeXtTSMPure
+from models.convnext_tsm import ConvNeXt_TSM
 from models.mobilenet_tsm import MobileNetV2_TSM
 from models.new_trn import TRNNew
+from models.resnext_tsm import ResNeXt50_TSM
 from models.timesformer_tiny import TimeSformerTiny
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet import TSMBaseline
@@ -167,11 +170,12 @@ def build_model(cfg: DictConfig) -> nn.Module:
 
     if name == "convnext_tsm":
         if not cfg.model.get("transformer", True):
-            return ConvNeXtTSMPure(
+            return ConvNeXt_TSM(
+                model_cfg=cfg.model,
                 num_classes=num_classes,
                 num_frames=num_frames,
-                in_channels=int(cfg.model.get("in_channels", 6)),
-                fold_div=int(cfg.model.get("fold_div", 8)),
+                pretrained=pretrained,
+                dropout=float(cfg.model.get("dropout", 0.2)),
             )
         return ConvNeXtTSMTransformer(
             num_classes=num_classes,
@@ -256,6 +260,23 @@ def build_model(cfg: DictConfig) -> nn.Module:
             num_frames=num_frames,
             pretrained=pretrained,
             dropout=float(cfg.model.get("dropout", 0.2))
+        )
+    if name == "efficientnet_custom":
+        return EfficientNetTemporalHead(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+            dropout=float(cfg.model.get("dropout", 0.2)),
+        )
+    if name == "resnext_tsm":
+        # Only from-scratch training for ResNeXt-50 + TSM, so pretrained is ignored.
+        return ResNeXt50_TSM(
+            in_channels=int(cfg.model.get("in_channels", 6)),
+            fold_div=int(cfg.model.get("fold_div", 8)),
+            num_classes=num_classes,
+            num_frames=num_frames,
+            dropout=float(cfg.model.get("dropout", 0.2)),
         )
 
     if name == "vjepa2_large":

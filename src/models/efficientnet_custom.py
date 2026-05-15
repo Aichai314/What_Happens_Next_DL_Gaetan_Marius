@@ -185,11 +185,176 @@ def _inject_tdm_into_mbconv(mbconv: MBConv, n_segment: int) -> None:
 
     mbconv.block = BlockWithTDM()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Temporal SE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TemporalSE(nn.Module):
+    """
+    Lightweight temporal squeeze excitation.
+
+    Input:
+        x : (B, T, C)
+
+    Learns which temporal positions are important.
+    """
+
+    def __init__(self, num_frames: int, reduction: int = 2):
+        super().__init__()
+
+        hidden_dim = max(1, num_frames // reduction)
+
+        self.fc = nn.Sequential(
+            nn.Linear(num_frames, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, num_frames),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x : (B, T, C)
+
+        # Temporal squeeze
+        w = x.mean(dim=-1)   # (B, T)
+
+        # Temporal excitation
+        w = self.fc(w)       # (B, T)
+        w = w.unsqueeze(-1)  # (B, T, 1)
+
+        return x * w
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Temporal head
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TemporalHead(nn.Module):
+    """
+    Lightweight temporal head:
+
+        RGB features
+        +
+        difference features
+        -> temporal Conv1D
+        -> temporal SE
+        -> classifier
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        num_frames: int,
+        num_classes: int,
+        dropout: float = 0.2,
+    ):
+        super().__init__()
+
+        self.num_frames = num_frames
+
+        # RGB + diff concatenation
+        fusion_dim = in_channels * 2
+
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(
+                fusion_dim,
+                fusion_dim,
+                kernel_size=3,
+                padding=1,
+                groups=fusion_dim,  # depthwise temporal conv
+            ),
+            nn.BatchNorm1d(fusion_dim),
+            nn.GELU(),
+        )
+
+        self.temporal_se = TemporalSE(num_frames=num_frames)
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim, num_classes),
+        )
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            feats : (B, T, C)
+
+        Returns:
+            logits : (B, num_classes)
+        """
+
+        b, t, c = feats.shape
+
+        # ── Difference branch ────────────────────────────────────────────────
+
+        diff = feats[:, 1:] - feats[:, :-1]   # (B, T-1, C)
+
+        # Pad first timestep with zeros to recover T frames
+        zero = torch.zeros_like(diff[:, :1])
+        diff = torch.cat([zero, diff], dim=1)  # (B, T, C)
+
+        # ── RGB + diff fusion ───────────────────────────────────────────────
+
+        x = torch.cat([feats, diff], dim=-1)   # (B, T, 2C)
+
+        # ── Temporal Conv1D ─────────────────────────────────────────────────
+
+        x = x.permute(0, 2, 1)                 # (B, 2C, T)
+        x = self.temporal_conv(x)
+        x = x.permute(0, 2, 1)                 # (B, T, 2C)
+
+        # ── Temporal SE ─────────────────────────────────────────────────────
+
+        x = self.temporal_se(x)
+
+        # ── Temporal pooling ────────────────────────────────────────────────
+
+        x = x.mean(dim=1)                      # (B, 2C)
+
+        return self.classifier(x)
+
+# =========================================================
+# THE NEW TEMPORAL ATTENTION HEAD
+# =========================================================
+class TemporalSelfAttention(nn.Module):
+    def __init__(self, embed_dim: int, num_frames: int, num_heads: int = 8, dropout: float = 0.5, attention_dropout: float = 0.3):
+        super().__init__()
+        # 1. Positional Embedding: Crucial so the attention knows frame order
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_frames, embed_dim))
+        
+        # 2. Multi-Head Attention: batch_first=True expects (B, T, C)
+        self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=attention_dropout, batch_first=True)
+        
+        # 3. Standard Transformer block normalization and MLP
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim * 2, embed_dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x shape: (B, T, C)
+        
+        # Add temporal position information
+        x = x + self.pos_embed
+        
+        # Self-Attention
+        attn_out, _ = self.attention(x, x, x)
+        x = self.norm1(x + attn_out)
+        
+        # Feed Forward Network
+        mlp_out = self.mlp(x)
+        x = self.norm2(x + mlp_out)
+        
+        # Instead of returning all T frames, we now pool the *attended* features
+        return x.mean(dim=1)
 
 # ── Main model ───────────────────────────────────────────────────────────────
 
-@two_stage_trainer
-class EfficientNet_TSM(nn.Module):
+class EfficientNetTemporalHead(nn.Module):
     """
     EfficientNet-B0 with:
       - TSM injected before the depthwise conv of every MBConv block
@@ -216,6 +381,7 @@ class EfficientNet_TSM(nn.Module):
         tcn_num_layers   = int(model_cfg.get("tcn_num_layers", 2))
         use_b1           = bool(model_cfg.get("efficientnet_b1", False))
         use_b3           = bool(model_cfg.get("efficientnet_b3", False))
+        backbone_path    = model_cfg.get("backbone_path", None)
 
         # ── Backbone (no pretrained weights per competition rules) ──────────
         if use_b1:
@@ -248,28 +414,64 @@ class EfficientNet_TSM(nn.Module):
                 # TDM only in deep layers and only if enabled
                 if use_tdm and deep:
                     _inject_tdm_into_mbconv(block, num_frames)
-
-        # ── Intermediate TCN ─────────────────────────────────────────────────
-        if use_tcn:
-            tcn_channels          = _EFFICIENTNET_CHANNELS[tcn_insert_after]
-            self.intermediate_tcn = IntermediateTCN(
-                channels    = tcn_channels,
-                n_segment   = num_frames,
-                kernel_size = tcn_kernel_size,
-                num_layers  = tcn_num_layers,
-            )
-            self.tcn_insert_after = tcn_insert_after
-        else:
-            self.intermediate_tcn = None
+        
+        if backbone_path:
+            print(f"--> Loading strictly backbone from: {backbone_path}")
+            checkpoint = torch.load(backbone_path, map_location="cpu")
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            
+            # Extract ONLY the backbone weights
+            backbone_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items() if 'backbone' in k}
+            self.backbone.load_state_dict(backbone_dict, strict=False)
  
-        # ── Classifier head ──────────────────────────────────────────────────
         in_features    = self.backbone.classifier[1].in_features
-        if model_cfg.get("new_tsm", False):
-            self.backbone.classifier = nn.Identity()   # remove original head
-        self.head = nn.Sequential(
-            nn.Dropout(p=dropout),
-            nn.Linear(in_features, num_classes),
-        )
+        self.backbone.classifier = nn.Identity()   # remove original head
+        
+        # ── Temporal head ───────────────────────────────────────────────────
+
+        if model_cfg.get("attention_head", False):
+            self.temporal_head = TemporalSelfAttention(
+                embed_dim=in_features,
+                num_frames=num_frames,
+                num_heads=model_cfg.get("attention_heads", 8),
+                dropout=dropout,
+                attention_dropout=model_cfg.get("attention_dropout", 0.15)
+            )
+        else:
+            self.temporal_head = TemporalHead(
+                in_channels=in_features,
+                num_frames=num_frames,
+                num_classes=num_classes,
+                dropout=dropout,
+            )
+    
+    # ────────────────────────────────────────────────────────────────────────
+    # Parameter groups
+    # ────────────────────────────────────────────────────────────────────────
+
+    def get_param_groups(
+        self,
+        base_lr: float,
+        backbone_lr_factor: float = 0.1,
+    ):
+        """
+        Returns optimizer parameter groups.
+
+        Example:
+            backbone lr = base_lr * 0.1
+            head lr      = base_lr
+        """
+
+        return [
+            {
+                "params": self.backbone.parameters(),
+                "lr": base_lr * backbone_lr_factor,
+            },
+            {
+                "params": self.temporal_head.parameters(),
+                "lr": base_lr,
+            },
+        ]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -283,17 +485,13 @@ class EfficientNet_TSM(nn.Module):
         # Fold time into batch dimension for the 2-D CNN
         x = x.view(b * t, c, h, w)                                    # (B*T, C, H, W)
 
-        # Run backbone stages with TCN inserted at the configured stage
-        for idx, stage in enumerate(self.backbone.features):
-            x = stage(x)
-            if self.intermediate_tcn is not None and idx == self.tcn_insert_after:
-                x = self.intermediate_tcn(x)    # residual — dims unchanged
+        feats = self.backbone.features(x)
 
         # Spatial pooling
-        feats = nn.functional.adaptive_avg_pool2d(x, (1, 1))
+        feats = nn.functional.adaptive_avg_pool2d(feats, 1)
         feats = feats.flatten(1)                                       # (B*T, 1280)
 
         # Temporal consensus (average over frames)
-        feats = feats.view(b, t, -1).mean(dim=1)                      # (B, 1280)
+        feats = feats.view(b, t, -1)                 # (B, 1280)
 
-        return self.head(feats)
+        return self.temporal_head(feats)
