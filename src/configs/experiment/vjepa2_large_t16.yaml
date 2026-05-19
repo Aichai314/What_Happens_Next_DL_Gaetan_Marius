@@ -1,0 +1,45 @@
+# @package _global_
+# V-JEPA 2 ViT-Large — A/B variant of vjepa2_large with num_frames=16.
+#
+# Rationale: the backbone is facebook/vjepa2-vitl-fpc16-256-ssv2, natively
+# trained on 16 frames (tubelet_size=2 → 8 temporal tokens, 3D RoPE positions
+# tuned for that layout). The challenge data only has 4 real jpg/video, so the
+# dataset upsamples 4 → 16 by repeating indices (_pick_frame_indices linspace).
+# No new information, but it puts the temporal positions / attention back
+# in-distribution — often +2-4% for fpc16 checkpoints.
+#
+# Keep as a SECOND XGBoost expert if it diverges from the 4-frame run
+# (prediction diversity helps the meta-learner). Separate checkpoint path so
+# it does NOT overwrite best_model_vjepa2_large.pt.
+#
+# python src/train.py experiment=vjepa2_large_t16
+defaults:
+  - override /model: vjepa2_large
+
+training:
+  checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_vjepa2_large_t16.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_vjepa2_large_t16.pt
+  epochs: 12
+  batch_size: 2
+  gradient_accumulation_steps: 8  # effective batch = 16
+  lr: 0.0001
+  backbone_lr_factor: 0.1         # same unfreeze as the 4-frame run
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: warmup_cosine
+  warmup_epochs: 1
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.0
+
+dataset:
+  num_frames: 16                  # the only difference vs vjepa2_large: 4 → 16
+  image_size: 256                 # (4 real frames repeated to 16 by the dataset)
+
+augmentation:
+  # With 16 sampled indices over 4 real frames, temporal drop now removes
+  # duplicates rather than information → a small amount is safe regularisation.
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.2
+  blur_prob: 0.2

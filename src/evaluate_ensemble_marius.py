@@ -8,6 +8,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_sample_weight
 from omegaconf import DictConfig
 import numpy
 from typing import List, Optional, Dict
@@ -48,6 +49,46 @@ def _get_labels_cache_path(val_dir: str) -> Path:
     cache_key = hashlib.md5(val_dir.encode()).hexdigest()
     return _get_cache_dir() / f"labels_{cache_key}.npy"
 
+def _fit_with_early_stopping_balanced(
+    model: XGBClassifier,
+    X_train: numpy.ndarray,
+    y_train: numpy.ndarray,
+    es_size: float = 0.15,
+    seed: int = 42,
+) -> XGBClassifier:
+    """
+    Fit an XGBClassifier without leaking the caller's held-out set.
+
+    Two fixes are applied here:
+    1. NO LEAK: the early-stopping eval set is carved out of ``X_train`` only
+       (an inner split). The caller scores on its own held-out fold, which the
+       model never sees during fitting or stopping-iteration selection. This
+       removes the optimistic bias of the previous code, where early stopping
+       AND scoring used the same fold.
+    2. CLASS BALANCE: training rows are weighted with 'balanced' class weights
+       so XGBoost stops favouring majority classes (parity with the LogReg
+       branch's class_weight='balanced').
+    """
+    try:
+        X_tr, X_es, y_tr, y_es = train_test_split(
+            X_train, y_train, test_size=es_size, random_state=seed, stratify=y_train
+        )
+    except ValueError:
+        # A class is too rare to stratify the inner split; fall back to random.
+        X_tr, X_es, y_tr, y_es = train_test_split(
+            X_train, y_train, test_size=es_size, random_state=seed
+        )
+
+    w_tr = compute_sample_weight(class_weight="balanced", y=y_tr)
+    model.fit(
+        X_tr, y_tr,
+        sample_weight=w_tr,
+        eval_set=[(X_es, y_es)],
+        verbose=False,
+    )
+    return model
+
+
 def _xgboost_stratified_kfold_cv(
     model_template: XGBClassifier,
     X_meta: numpy.ndarray,
@@ -56,35 +97,34 @@ def _xgboost_stratified_kfold_cv(
 ) -> List[float]:
     """
     Manual k-fold cross-validation for XGBoost that handles class imbalance per fold.
-    
+
     This bypasses sklearn's cross_val_score which fails when some folds don't have all classes.
     Each fold gets a fresh model instance to avoid state issues.
+
+    Early stopping uses an inner split of the fold's TRAIN data only; the score
+    is computed on the fold's held-out rows, which stay untouched (no leak).
     """
     from sklearn.model_selection import StratifiedKFold
-    
+
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold_scores = []
     best_iterations = [] # NEW: Track the stopping points
-    
+
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_meta, y_true)):
         # Create a fresh model for each fold
         fold_model = XGBClassifier(**model_template.get_params())
-        
+
         X_train, X_val = X_meta[train_idx], X_meta[val_idx]
         y_train, y_val = y_true[train_idx], y_true[val_idx]
-        
-        # Train on this fold
-        fold_model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            verbose=False
-        )
-        
-        # Evaluate on validation set
+
+        # Train (inner ES split + balanced weights); X_val is never seen here
+        _fit_with_early_stopping_balanced(fold_model, X_train, y_train)
+
+        # Evaluate on the clean held-out fold
         fold_score = fold_model.score(X_val, y_val)
         fold_scores.append(fold_score)
         best_iterations.append(fold_model.best_iteration)
-    
+
     return fold_scores, best_iterations
 
 def _create_xgboost_model(hyperparams: Optional[Dict] = None) -> XGBClassifier:
@@ -158,16 +198,17 @@ def _optimize_xgboost_hyperparams_optuna(
             'alpha': trial.suggest_float('alpha', 0.1, 2.0),
         }
         
-        model = _create_xgboost_model(params)
-        
-        # Evaluate on 5-fold CV with intermediate reporting for pruning
+        # Evaluate on 5-fold CV with intermediate reporting for pruning.
+        # Fresh model per fold; early stopping uses an inner split of the
+        # fold's train data, scoring uses the clean held-out fold (no leak).
         fold_scores = []
         for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_meta, y_true)):
             X_train, X_val = X_meta[train_idx], X_meta[val_idx]
             y_train, y_val = y_true[train_idx], y_true[val_idx]
-            
-            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-            fold_score = model.score(X_val, y_val)
+
+            fold_model = _create_xgboost_model(params)
+            _fit_with_early_stopping_balanced(fold_model, X_train, y_train)
+            fold_score = fold_model.score(X_val, y_val)
             fold_scores.append(fold_score)
             
             # Report intermediate value for pruning
@@ -318,7 +359,8 @@ def evaluate_and_stack_n_models(
 
         # 2. Setup Dataloader specific to this model's config
         use_imagenet_norm = cfg.model.get("pretrained", False)
-        transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm)
+        image_size = int(cfg.dataset.get("image_size", 224))
+        transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm, image_size=image_size)
         
         num_frames = int(cfg.dataset.get("num_frames", 4))
         dataset = VideoFrameDataset(
@@ -476,8 +518,10 @@ def evaluate_and_stack_n_models(
             
         final_model = XGBClassifier(**final_params)
 
-        # Train blindly on 100% of the data!
-        final_model.fit(X_meta, y_true_encoded, verbose=False)
+        # Train blindly on 100% of the data, with the same balanced class
+        # weights used during CV (parity with _fit_with_early_stopping_balanced).
+        w_full = compute_sample_weight(class_weight="balanced", y=y_true_encoded)
+        final_model.fit(X_meta, y_true_encoded, sample_weight=w_full, verbose=False)
         print(f"Final Model: Trained blindly on 100% data for exactly {optimal_trees} trees.")
         meta_model = final_model
     else:

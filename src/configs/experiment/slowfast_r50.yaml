@@ -10,29 +10,31 @@ defaults:
 training:
   checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_slowfast_r50.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_slowfast_r50.pt
-  epochs: 15
-  batch_size: 8
-  gradient_accumulation_steps: 2
+  epochs: 25
+  batch_size: 4
+  gradient_accumulation_steps: 4
   lr: 0.0003
-  backbone_lr_factor: 0.05
+  backbone_lr_factor: 0.1
   optimizer: adamw
-  weight_decay: 0.05
-  scheduler: cosine
-  label_smoothing: 0.1
+  weight_decay: 0.02
+  scheduler: warmup_cosine
+  warmup_epochs: 2
+  label_smoothing: 0.05
   augmentation: true
   num_workers: 4
-  mixup_alpha: 0.2
+  mixup_alpha: 0.1
 
 dataset:
-  # num_frames must be a multiple of 4 (alpha): slow gets num_frames/4 frames.
-  # 8 -> slow=2, fast=8 — small two-pathway model, Kaggle test (4 frames) gets replicated to 8.
-  num_frames: 8
+  # num_frames must be a multiple of 4 (alpha). 32 = canonical SlowFast K400 regime
+  # (slow=8, fast=32). With 13 unique SSv2 frames per video, the dataset replicates
+  # to reach 32 — mirroring Kaggle test conditions (4 frames replicated to 32).
+  num_frames: 32
 
 augmentation:
   temporal_drop_prob: 0.3
-  grayscale_prob: 0.3
+  grayscale_prob: 0.2
   blur_prob: 0.3
   # Enable random temporal subsampling for SSv2 13-frame training data:
-  # at each epoch, draw 4 frames at random from the 13 available per video.
-  # Set false (or override on CLI) when running on machines without SSv2 frames.
+  # falls back to deterministic uniform sampling when num_available <= num_frames,
+  # so safe to leave true on machines with only the 4-frame challenge data.
   random_temporal_sampling: true

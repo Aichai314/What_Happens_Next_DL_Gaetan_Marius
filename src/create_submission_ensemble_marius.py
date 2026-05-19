@@ -60,7 +60,8 @@ def extract_test_probabilities(
 
         # Setup Transform & Dataset
         use_imagenet_norm = cfg.model.get("pretrained", False)
-        transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm)
+        image_size = int(cfg.dataset.get("image_size", 224))
+        transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm, image_size=image_size)
 
         dataset = VideoFrameDataset(
             root_dir=test_root,
@@ -104,9 +105,13 @@ def main(cfg: DictConfig) -> None:
     # =========================================================
     # CONFIGURATION: Define your Kaggle Roster here
     # =========================================================
+    # 1 best checkpoint per architecture (intra-arch copies were ~0.98 correlated)
+    # + SlowFast as a decorrelated motion-CNN 4th architecture.
     my_models = [
-    "checkpoints/best_model_videomae_large_kinetics.pt",
-    "checkpoints/best_model_videomae_v2_ssv2.pt",
+        "/Data/marius.truquin/Model_checkpoints/best_model_videomae_large_kinetics.pt",  # kinetics best (59.64% val)
+        "/Data/marius.truquin/Model_checkpoints/best_model_videomae_v2_ssv2_2.pt",       # ssv2 best (59.36% val)
+        "/Data/marius.truquin/Model_checkpoints/best_model_vjepa2_large_v1.pt",          # vjepa2 (68.15% val, backbone)
+        "/Data/marius.truquin/Model_checkpoints/best_model_slowfast_r50.pt",             # motion-CNN, decorrelated
     ]
 
 

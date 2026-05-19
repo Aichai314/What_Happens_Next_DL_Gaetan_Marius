@@ -10,24 +10,28 @@ defaults:
 training:
   checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_vjepa2_large.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_vjepa2_large.pt
-  epochs: 6
+  # Backbone was effectively frozen before (0.01 * 1e-4 = 1e-6, then *llrd^depth
+  # → 1e-7..1e-8): val acc saturated in 1 epoch then only crept +3pts (linear-probe
+  # regime). Unfreeze the encoder so it adapts to the 4-frame / new-domain data.
+  epochs: 12                      # backbone now learns → longer schedule pays off
   batch_size: 2
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 8  # effective batch = 16
   lr: 0.0001
-  backbone_lr_factor: 0.01
+  backbone_lr_factor: 0.1         # 0.01 → 0.1 : top encoder LR ~1e-5 (main lever)
   optimizer: adamw
   weight_decay: 0.05
-  scheduler: cosine
+  scheduler: warmup_cosine        # warmup protects pretrained pooler from the
+  warmup_epochs: 1                # random head's large initial gradients
   label_smoothing: 0.1
   augmentation: true
   num_workers: 4
-  mixup_alpha: 0.2
+  mixup_alpha: 0.0                # model underfits (train≈val) → mixup = noise
 
 dataset:
-  num_frames: 16
-  image_size: 256
+  num_frames: 4                   # matches real data (4 jpg/video); was overridden
+  image_size: 256                 # to 4 on CLI anyway despite the old 16 here
 
 augmentation:
-  temporal_drop_prob: 0.2
-  grayscale_prob: 0.3
-  blur_prob: 0.3
+  temporal_drop_prob: 0.0         # only 4 frames: dropping one = info loss, not regul
+  grayscale_prob: 0.2
+  blur_prob: 0.2
