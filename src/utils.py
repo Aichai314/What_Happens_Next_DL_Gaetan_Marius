@@ -13,6 +13,7 @@ import numpy as np
 from omegaconf import DictConfig
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 from torchvision import models
@@ -107,10 +108,12 @@ class VideoTransform:
         is_training: bool = True,
         use_imagenet_norm: bool = True,
         image_size: int = 224,
+        tta_mode: str = None,
     ) -> None:
         self.is_training = is_training
         self.image_size = image_size
         self.cfg = cfg
+        self.tta_mode = tta_mode
 
         if use_imagenet_norm:
             self.mean = [0.485, 0.456, 0.406]
@@ -169,8 +172,41 @@ class VideoTransform:
             random.shuffle(jitter_order)
 
         result: List[torch.Tensor] = []
-        for img in frames:
-            if self.is_training:
+
+        # 1. TTA MODE (Validation with deterministic augmentation)
+        if not self.is_training and self.tta_mode is not None:
+            for img in frames:
+                # Rotate
+                if self.tta_mode == 'rotate_cw':
+                    img = TF.rotate(img, 5.0)
+                elif self.tta_mode == 'rotate_ccw':
+                    img = TF.rotate(img, -5.0)
+                
+                # Resize / Crop
+                if self.tta_mode == 'zoom':
+                    # Scale 224 -> 256 for the zoom out effect
+                    zoom_size = int(self.image_size * (256/224))
+                    img = TF.resize(img, [zoom_size, zoom_size])
+                    top = (zoom_size - self.image_size) // 2
+                    left = (zoom_size - self.image_size) // 2
+                    img = TF.crop(img, top, left, self.image_size, self.image_size)
+                else:
+                    img = TF.resize(img, [self.image_size, self.image_size])
+                
+                # Filters
+                if self.tta_mode == 'gray':
+                    img = TF.rgb_to_grayscale(img, num_output_channels=3)
+                if self.tta_mode == 'blur':
+                    blurer = transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.5, 1.0))
+                    img = blurer(img)
+
+                tensor = TF.to_tensor(img)
+                tensor = TF.normalize(tensor, self.mean, self.std)
+                result.append(tensor)
+
+        # 2. STANDARD TRAINING MODE
+        elif self.is_training:
+            for img in frames:
                 # Spatial (identique pour toutes les frames)
                 img = TF.rotate(img, angle, fill=[128, 128, 128])
                 img = TF.resized_crop(  
@@ -191,12 +227,16 @@ class VideoTransform:
                         elif idx == 1: img = TF.adjust_contrast(img, c_factor)
                         elif idx == 2: img = TF.adjust_saturation(img, s_factor)
                         elif idx == 3: img = TF.adjust_hue(img, h_factor)
-            else:
-                img = TF.resize(img, [self.image_size, self.image_size])  
 
-            tensor = TF.to_tensor(img)
-            tensor = TF.normalize(tensor, self.mean, self.std)
-            result.append(tensor)
+                tensor = TF.to_tensor(img)
+                tensor = TF.normalize(tensor, self.mean, self.std)
+                result.append(tensor)
+        else:
+            for img in frames:
+                img = TF.resize(img, [self.image_size, self.image_size])  
+                tensor = TF.to_tensor(img)
+                tensor = TF.normalize(tensor, self.mean, self.std)
+                result.append(tensor)
         
         stacked_frames = torch.stack(result)  # (T, 3, H, W)
         
@@ -232,9 +272,69 @@ class VideoTransform:
             
             # Concatenate along the channel dimension (dim=1)
             # Resulting shape: (T, 6, H, W)
-            stacked_frames = torch.cat([stacked_frames, diffs], dim=1)
+            stacked_frames = torch.cat([stacked_frames, diffs], dim=1) 
+            if self.is_training and self.cfg.augmentation.get("remove_background", False):
+                # Randomly zero out the original spatial channels to force reliance on motion
+                if random.random() < self.cfg.augmentation.get("remove_rgb_prob", 0.15):
+                    stacked_frames[:, 0:3, :, :] = 0.0 # Black out the RGB
+                
+                if random.random() < self.cfg.augmentation.get("heavy_spatial_blur", 0.2):
+                    # Apply a strong Gaussian blur to the spatial channels to destroy fine details
+                    blurer = transforms.GaussianBlur(kernel_size=(15, 15), sigma=(5.0, 10.0))
+                    
+                    # Apply blur directly to the 4D tensor slice (Time, Channels, Height, Width)
+                    # This operates instantly and preserves your mean/std normalization!
+                    stacked_frames[:, 0:3, :, :] = blurer(stacked_frames[:, 0:3, :, :])
 
         return stacked_frames
+
+class TTATransform:
+    """
+    Factory class that returns 6 VideoTransform instances configured for TTA.
+    Since they are instances of VideoTransform, they natively handle
+    (T, 6, H, W) frame differencing and are compatible with VideoFrameDataset.
+    """
+    
+    def __init__(self, cfg: DictConfig, use_imagenet_norm: bool = False, image_size: int = 224):
+        self.cfg = cfg
+        self.use_imagenet_norm = use_imagenet_norm
+        self.image_size = image_size
+    
+    def get_transforms(self):
+        """Returns the list of 6 configured TTA transforms"""
+        modes = [
+            None,          # 1. Original (No TTA flag)
+            'zoom',        # 2. Slight Zoom out
+            'gray',        # 3. Grayscale
+            'blur',        # 4. Slight Blur
+            'rotate_cw',   # 5. Rotation +5°
+            'rotate_ccw',  # 6. Rotation -5°
+        ]
+        
+        transforms_list = []
+        for mode in modes:
+            transforms_list.append(
+                VideoTransform(
+                    cfg=self.cfg,
+                    is_training=False,
+                    use_imagenet_norm=self.use_imagenet_norm,
+                    image_size=self.image_size,
+                    tta_mode=mode
+                )
+            )
+            
+        return transforms_list
+
+class TTAWeightedMean(nn.Module):
+    def __init__(self, n_transforms: int):
+        super().__init__()
+        self.weights = nn.Parameter(torch.ones(n_transforms))
+    
+    def forward(self, logits_list):
+        # logits_list : liste de (B, num_classes)
+        w = F.softmax(self.weights, dim=0)
+        stacked = torch.stack(logits_list, dim=0)  # (N_tta, B, num_classes)
+        return (w[:, None, None] * stacked).sum(0)  # (B, num_classes)
 
 
 def build_transforms(
@@ -530,3 +630,81 @@ def inject_tdm_into_resnet(model: nn.Module, num_frames: int, full: bool = False
             else:
                 module.conv2 = TemporalDifference(module.conv2, num_frames=num_frames)
     return model
+
+# Format: {True_Class (Majority): [(Sibling_Class (Minority), leak_weight)]}
+ASYMMETRIC_SIMILARITY_MAP = {
+    
+    # ── THE "PRETENDING" CLUSTER ─────────────────────────────────────────────
+    # Pretending actions are visually identical for the first 80% of the video.
+    # The network must be forgiven for confusing them, but the Minority must be protected.
+
+    # True: 22 (Putting into, ~2200 samples) -> Leak to 16 (Pretending, ~300 samples)
+    22: [(16, 0.15)], 
+    
+    # True: 11 (Picking up, ~1250 samples) -> Leak to 14 (Pretending, ~300 samples)
+    11: [(14, 0.15)],
+
+    # True: 13 (Pouring out of, ~900 samples) -> Leak to 15 (Pretending to pour out, ~300 samples)
+    13: [(15, 0.15)],
+
+    # True: 29 (Throwing, ~1700 samples) -> Leak to 17 (Pretending to throw, ~1500 samples)
+    # Note: Less imbalanced, but highly semantically ambiguous. A smaller leak is safer.
+    29: [(17, 0.10)],
+
+
+    # ── THE "SPILLING" CRISIS ────────────────────────────────────────────────
+    # Class 26 (Spilling next to) is your rarest class (~150 samples). 
+    # Spilling is physically just a "failed" put or pour.
+    
+    # True: 23 (Putting next to, ~2000 samples) -> Leak heavily to 26
+    23: [(26, 0.15)],
+    
+    # True: 12 (Pouring into, ~1000 samples) -> Leak to 26
+    12: [(26, 0.10)],
+
+
+    # ── THE "DIRECTIONAL" BLUR ───────────────────────────────────────────────
+    # Left-to-Right (18) and Right-to-Left (19) are massive classes (~1500+ samples).
+    # Moving Away (06) and Moving Closer (07) are identical motions but on the Z-axis.
+    # Sometimes camera angles make X-axis and Z-axis motion ambiguous.
+    # If your confusion matrix shows bleeding here, add a tiny cross-leak:
+    18: [(6, 0.05), (7, 0.05)],
+    19: [(6, 0.05), (7, 0.05)],
+}
+
+class AsymmetricSmoothedCrossEntropy(nn.Module):
+    """
+    Custom Cross Entropy Loss that applies Asymmetric Semantic Smoothing.
+    Automatically handles both hard integer labels and soft MixUp probabilities.
+    """
+    def __init__(self, similarity_map: dict = ASYMMETRIC_SIMILARITY_MAP, base_smooth: float = 0.2, num_classes: int = 33):
+        super().__init__()
+        self.similarity_map = similarity_map
+        self.base_smooth = base_smooth
+        self.num_classes = num_classes
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # ── 1. Format Targets ──────────────────────────────────────────────
+        # If targets are 1D (hard integer labels from standard training)
+        if targets.dim() == 1:
+            targets_probs = F.one_hot(targets, num_classes=self.num_classes).float()
+        # If targets are 2D (soft probabilities from MixUp)
+        else:
+            targets_probs = targets.float()
+
+        # ── 2. Standard Uniform Smoothing ──────────────────────────────────
+        # Creates a new tensor, so we don't accidentally modify dataloader references in-place
+        smoothed = targets_probs * (1.0 - self.base_smooth) + (self.base_smooth / self.num_classes)
+        
+        # ── 3. Asymmetric Bleed ────────────────────────────────────────────
+        for majority_class, leaks in self.similarity_map.items():
+            for minority_sibling, leak_weight in leaks:
+                # Calculate transfer based on the ORIGINAL target weight (handles MixUp splits perfectly)
+                transfer = targets_probs[:, majority_class] * leak_weight
+                
+                smoothed[:, minority_sibling] += transfer
+                smoothed[:, majority_class] -= transfer
+                
+        # ── 4. Final Cross Entropy ─────────────────────────────────────────
+        # PyTorch F.cross_entropy natively computes cross entropy for probability targets
+        return F.cross_entropy(logits, smoothed)

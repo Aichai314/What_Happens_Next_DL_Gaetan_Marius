@@ -1,21 +1,20 @@
 # @package _global_
-# EfficientNet + TSM —  Track A
-# python src/train.py experiment=efficientnet_6channels
+# EfficientNetB0 + TDN —  Track A
+# python src/train.py experiment=efficientnet_tdn
 defaults:
   - override /model: efficientnet_baseline
 
 model:
+  name: efficientnet_tdn
   pretrained: false
   fold_div: 8
   in_channels: 3
-  new_tsm: true
-  tsm_insert_after: 4
-  dropout: 0.4
-  stochastic_depth: 0.3
+  dropout: 0.2
+
 
 training:
   augmentation: true
-  mixup_alpha: 0.4
+  mixup_alpha: 0.2
   epochs: 50
   batch_size: 64
   num_workers: 12
@@ -25,19 +24,17 @@ training:
   scheduler: warmup_cosine
   warmup_epochs: 5
   label_smoothing: 0.2
-  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet.pt
-  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet.pt
-  # resume_from: ${hydra:runtime.cwd}/latest_model_efficientnet.pt
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet_tdn.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet_tdn.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_tdn.pt
 
 dataset:
   num_frames: 4
-  use_frame_differencing: true
-  only_motion: true
 
 augmentation:
   temporal_drop_prob: 0.1
   grayscale_prob: 0.3
-  blur_prob: 0.2
+  blur_prob: 0.15
   erasing_prob: 0.3
   rotation_prob: 0.4
   rotation_degrees: 10.0

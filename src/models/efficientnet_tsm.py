@@ -1,35 +1,26 @@
 """
-EfficientNet-B0 + TSM (+ optional TDM in deep layers)
+EfficientNet-B0/B1/B3 & V2-S + TSM (+ optional TDM/TCN)
 
-Corrections vs. previous version:
-  1. TSM is injected INSIDE each MBConv block, just before the depthwise
-     conv (block[1][0]), which is the correct location — not wrapping the
-     entire MBConv from outside.
-  2. TDM (Temporal Difference Module) is optionally injected only in deep
-     layers (features[5:]) where features are abstract enough for temporal
-     differences to carry meaningful motion signal.
-  3. 6-channel input removed (empirically worse than 3-channel RGB).
+Updates:
+  1. Added support for EfficientNetV2-S.
+  2. Implemented dynamic TSM injection to handle both standard MBConv 
+     and the new FusedMBConv layers found in V2 architectures.
 """
 
 from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 import torchvision.models as tv_models
-from torchvision.models.efficientnet import MBConv
+from torchvision.ops import Conv2dNormActivation
+from torchvision.models.efficientnet import MBConv, FusedMBConv
 from utils import two_stage_trainer
 
 # ── Stage channel map ────────────────────────────────────────────────────────
- 
-# B0 and B1 share the same channel widths — B1 differs only in block depth
 _EFFICIENTNET_CHANNELS = {0: 32, 1: 16, 2: 24, 3: 40, 4: 80, 5: 112, 6: 192, 7: 320}
 
-# ── Temporal Shift Module ────────────────────────────────────────────────────
+# ── Temporal Modules (TSM / TDM / TCN) ───────────────────────────────────────
 
 class TemporalShift(nn.Module):
-    """
-    Shift 1/fold_div channels forward and 1/fold_div channels backward in time.
-    Must be placed just before a depthwise conv inside an MBConv block.
-    """
     def __init__(self, n_segment: int, fold_div: int = 8) -> None:
         super().__init__()
         self.n_segment = n_segment
@@ -42,28 +33,18 @@ class TemporalShift(nn.Module):
 
         fold = c // self.fold_div
         out = x.clone()
-        out[:, 1:,  :fold]          = x[:, :-1, :fold]           # past  → current
-        out[:, :-1, fold:2 * fold]  = x[:, 1:,  fold:2 * fold]   # future → current
-        out[:, 0,   :fold]          = 0                           # no past  for frame 0
-        out[:, -1,  fold:2 * fold]  = 0                           # no future for last frame
+        out[:, 1:,  :fold]          = x[:, :-1, :fold]           
+        out[:, :-1, fold:2 * fold]  = x[:, 1:,  fold:2 * fold]   
+        out[:, 0,   :fold]          = 0                           
+        out[:, -1,  fold:2 * fold]  = 0                           
 
         return out.view(bt, c, h, w)
 
-
-# ── Temporal Difference Module ───────────────────────────────────────────────
-
 class TemporalDifference(nn.Module):
-    """
-    TDM: adds a scaled residual of (F(t) - F(t-1)) to the current feature map.
-    Captures explicit motion signal at the feature level.
-
-    alpha is learnable so the network can suppress TDM if it is not useful
-    for a given layer.
-    """
     def __init__(self, n_segment: int) -> None:
         super().__init__()
         self.n_segment = n_segment
-        self.alpha     = nn.Parameter(torch.zeros(1))  # init at 0 = identity
+        self.alpha     = nn.Parameter(torch.zeros(1)) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bt, c, h, w = x.shape
@@ -71,47 +52,20 @@ class TemporalDifference(nn.Module):
         x_r = x.view(b, self.n_segment, c, h, w)
 
         diff          = torch.zeros_like(x_r)
-        diff[:, 1:]   = x_r[:, 1:] - x_r[:, :-1]   # F(t) - F(t-1); 0 for first frame
+        diff[:, 1:]   = x_r[:, 1:] - x_r[:, :-1]   
 
         return x + self.alpha * diff.view(bt, c, h, w)
 
 class IntermediateTCN(nn.Module):
-    """
-    Early temporal fusion module inserted between two EfficientNet stages.
- 
-    Operates as a spatial residual so downstream stages and TSM are
-    completely unaffected:
- 
-      1. Spatial GAP       : (B*T, C, H, W) -> (B, T, C)
-      2. Depthwise TCN     : (B, T, C) -> (B, T, C)   [same dim, minimal params]
-      3. Spatial broadcast : (B, T, C) -> (B*T, C, 1, 1)
-      4. Residual add      : x + alpha * tcn_out  [preserves (B*T, C, H, W)]
- 
-    Depthwise Conv1d (groups=C) is used because:
-      - T=4 is very short; a dense Conv1d over C channels would overfit easily.
-      - Consistent with EfficientNet's own depthwise philosophy.
- 
-    alpha initialised at 0: module starts as identity and only activates
-    if the TCN signal is genuinely useful.
-    """
-    def __init__(
-        self,
-        channels:    int,
-        n_segment:   int,
-        kernel_size: int = 3,
-        num_layers:  int = 2,
-    ) -> None:
+    def __init__(self, channels: int, n_segment: int, kernel_size: int = 3, num_layers: int = 2) -> None:
         super().__init__()
         self.n_segment = n_segment
-        padding        = (kernel_size - 1) // 2  # 'same' padding
+        padding        = (kernel_size - 1) // 2 
  
         layers: list[nn.Module] = []
         for i in range(num_layers):
             layers += [
-                nn.Conv1d(
-                    channels, channels, kernel_size,
-                    padding=padding, groups=channels,  # depthwise temporal conv
-                ),
+                nn.Conv1d(channels, channels, kernel_size, padding=padding, groups=channels),
                 nn.BatchNorm1d(channels),
                 nn.ReLU(inplace=True) if i < num_layers - 1 else nn.Identity(),
             ]
@@ -121,58 +75,47 @@ class IntermediateTCN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bt, c, h, w = x.shape
         b = bt // self.n_segment
- 
-        # 1. Spatial GAP — one vector per frame
-        gap = x.view(b, self.n_segment, c, h, w).mean(dim=[3, 4])  # (B, T, C)
- 
-        # 2. Depthwise TCN over temporal dimension
-        tcn_out = self.tcn(gap.permute(0, 2, 1))   # (B, C, T)
-        tcn_out = tcn_out.permute(0, 2, 1)          # (B, T, C)
- 
-        # 3. Broadcast to spatial resolution
-        tcn_out = tcn_out.reshape(bt, c, 1, 1)      # (B*T, C, 1, 1)
- 
-        # 4. Learnable residual
+        gap = x.view(b, self.n_segment, c, h, w).mean(dim=[3, 4])  
+        tcn_out = self.tcn(gap.permute(0, 2, 1)).permute(0, 2, 1)          
+        tcn_out = tcn_out.reshape(bt, c, 1, 1)      
         return x + self.alpha * tcn_out
 
 
 # ── Injection helpers ────────────────────────────────────────────────────────
 
-def _inject_tsm_into_mbconv(mbconv: MBConv, n_segment: int, fold_div: int) -> None:
+def _inject_tsm_safely(block_module: nn.Module, n_segment: int, fold_div: int) -> None:
     """
-    Injects a TemporalShift in-place just before the depthwise conv inside
-    an MBConv block.
-
-    EfficientNet-B0 MBConv internal layout (block is a Sequential):
-      [0] expand conv  (Conv2dNormActivation, 1x1)   — absent in stage 1 (no expansion)
-      [-2] depthwise   (Conv2dNormActivation, 3x3 dw)
-      [-1] project     (Conv2dNormActivation, 1x1, no activation)
-
-    We prepend TemporalShift before the depthwise conv, which is always the
-    second-to-last element of mbconv.block.
+    Dynamically scans the block to inject TSM before the spatial convolution.
+    Handles both standard MBConv and V2's FusedMBConv.
     """
-    block = mbconv.block  # nn.Sequential
+    block = block_module.block  # nn.Sequential
+    target_idx = -1
 
-    # Find depthwise conv index: always second-to-last in EfficientNet-B0
-    dw_idx = len(block) - 2
+    if isinstance(block_module, FusedMBConv):
+        # In FusedMBConv, the spatial convolution (3x3) is ALWAYS the first layer
+        target_idx = 0
+    elif isinstance(block_module, MBConv):
+        # In standard MBConv, we scan for the depthwise convolution (groups > 1)
+        for i, layer in enumerate(block):
+            if isinstance(layer, Conv2dNormActivation):
+                conv = layer[0]
+                if isinstance(conv, nn.Conv2d) and conv.groups > 1:
+                    target_idx = i
+                    break
 
-    # Rebuild block with TemporalShift inserted before depthwise conv
-    layers = []
-    for i, layer in enumerate(block):
-        if i == dw_idx:
-            layers.append(TemporalShift(n_segment, fold_div))
-        layers.append(layer)
+    # Rebuild block with TemporalShift inserted safely
+    if target_idx != -1:
+        layers = []
+        for i, layer in enumerate(block):
+            if i == target_idx:
+                layers.append(TemporalShift(n_segment, fold_div))
+            layers.append(layer)
+        block_module.block = nn.Sequential(*layers)
 
-    mbconv.block = nn.Sequential(*layers)
 
-
-def _inject_tdm_into_mbconv(mbconv: MBConv, n_segment: int) -> None:
-    """
-    Injects a TemporalDifference module in-place at the OUTPUT of an MBConv
-    block (after the projection conv, before the residual addition).
-    We wrap the whole block so TDM sees the projected features.
-    """
-    original_block = mbconv.block
+def _inject_tdm_safely(block_module: nn.Module, n_segment: int) -> None:
+    """Wraps either MBConv or FusedMBConv with TDM safely."""
+    original_block = block_module.block
 
     class BlockWithTDM(nn.Module):
         def __init__(self):
@@ -183,20 +126,13 @@ def _inject_tdm_into_mbconv(mbconv: MBConv, n_segment: int) -> None:
         def forward(self, x):
             return self.tdm(self.block(x))
 
-    mbconv.block = BlockWithTDM()
+    block_module.block = BlockWithTDM()
 
 
 # ── Main model ───────────────────────────────────────────────────────────────
 
 @two_stage_trainer
 class EfficientNet_TSM(nn.Module):
-    """
-    EfficientNet-B0 with:
-      - TSM injected before the depthwise conv of every MBConv block
-      - TDM optionally injected at the output of deep MBConv blocks (features[5:])
-      - Standard 3-channel RGB input (6-channel empirically worse)
-    """
-
     def __init__(
         self,
         model_cfg: DictConfig,
@@ -208,50 +144,73 @@ class EfficientNet_TSM(nn.Module):
         super().__init__()
         self.num_frames = num_frames
 
+        in_channels = int(model_cfg.get("in_channels", 3))
         fold_div = int(model_cfg.get("fold_div", 8))
         use_tdm  = bool(model_cfg.get("use_tdm", False))
         use_tcn          = bool(model_cfg.get("use_tcn", False))
         tcn_insert_after = int(model_cfg.get("tcn_insert_after", 5))
         tcn_kernel_size  = int(model_cfg.get("tcn_kernel_size", 3))
         tcn_num_layers   = int(model_cfg.get("tcn_num_layers", 2))
-        use_b1           = bool(model_cfg.get("efficientnet_b1", False))
-        use_b3           = bool(model_cfg.get("efficientnet_b3", False))
+        stochastic_depth = float(model_cfg.get("stochastic_depth", 0.2))
+        
+        # Architecture toggles
+        use_b1   = bool(model_cfg.get("efficientnet_b1", False))
+        use_b3   = bool(model_cfg.get("efficientnet_b3", False))
+        use_v2_s = bool(model_cfg.get("efficientnet_v2_s", False))
 
-        # ── Backbone (no pretrained weights per competition rules) ──────────
-        if use_b1:
-            weights       = tv_models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
+        # ── Backbone ────────────────────────────────────────────────────────
+        if use_v2_s:
+            weights = tv_models.EfficientNet_V2_S_Weights.DEFAULT if pretrained else None
+            self.backbone = tv_models.efficientnet_v2_s(weights=weights)
+        elif use_b1:
+            weights = tv_models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
             self.backbone = tv_models.efficientnet_b1(weights=weights)
         elif use_b3:
-            weights       = tv_models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
+            weights = tv_models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
             self.backbone = tv_models.efficientnet_b3(weights=weights)
         else:
-            weights       = tv_models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
-            self.backbone = tv_models.efficientnet_b0(weights=weights)
+            weights = tv_models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
+            self.backbone = tv_models.efficientnet_b0(weights=weights,
+                                                      stochastic_depth_prob=stochastic_depth)
 
+        # ── Stem Surgery (Dynamic Input Channels) ─────────────────────────
+        if in_channels != 3:
+            # The stem conv is always the first layer of the first Conv2dNormActivation block
+            original_conv = self.backbone.features[0][0]
+            self.backbone.features[0][0] = nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=original_conv.out_channels,
+                kernel_size=original_conv.kernel_size,
+                stride=original_conv.stride,
+                padding=original_conv.padding,
+                bias=original_conv.bias is not None
+            )
+        
         # ── TSM + optional TDM injection ────────────────────────────────────
         for feat_idx, stage in enumerate(self.backbone.features):
             if not isinstance(stage, nn.Sequential):
                 continue
-            deep = feat_idx >= 5   # features[5], [6], [7] are deep stages
+            deep = feat_idx >= 5
+            apply_tsm = feat_idx >= model_cfg.get("tsm_insert_after", 4)
             for sub_idx, block in enumerate(stage):
-                if not isinstance(block, MBConv):
+                # V2 compatibility: Check for both MBConv and FusedMBConv
+                if not isinstance(block, (MBConv, FusedMBConv)):
                     continue
-                if model_cfg.get("new_tsm", False):
-                    # TSM in every MBConv (correct position: before depthwise conv)
-                    _inject_tsm_into_mbconv(block, num_frames, fold_div)
+                
+                if model_cfg.get("new_tsm", False) and apply_tsm:
+                    _inject_tsm_safely(block, num_frames, fold_div)
                 else:
-                    # Original TSM implementation: wraps entire MBConv from outside (incorrect)
                     stage[sub_idx] = nn.Sequential(
                         TemporalShift(num_frames, fold_div),
                         block,
                     )
-                # TDM only in deep layers and only if enabled
+                
                 if use_tdm and deep:
-                    _inject_tdm_into_mbconv(block, num_frames)
+                    _inject_tdm_safely(block, num_frames)
 
         # ── Intermediate TCN ─────────────────────────────────────────────────
         if use_tcn:
-            tcn_channels          = _EFFICIENTNET_CHANNELS[tcn_insert_after]
+            tcn_channels          = _EFFICIENTNET_CHANNELS.get(tcn_insert_after, 256) # Fallback for V2
             self.intermediate_tcn = IntermediateTCN(
                 channels    = tcn_channels,
                 n_segment   = num_frames,
@@ -263,37 +222,35 @@ class EfficientNet_TSM(nn.Module):
             self.intermediate_tcn = None
  
         # ── Classifier head ──────────────────────────────────────────────────
-        in_features    = self.backbone.classifier[1].in_features
+        in_features = self.backbone.classifier[1].in_features
         if model_cfg.get("new_tsm", False):
-            self.backbone.classifier = nn.Identity()   # remove original head
-        self.head = nn.Sequential(
-            nn.Dropout(p=dropout),
-            nn.Linear(in_features, num_classes),
-        )
+            self.backbone.classifier = nn.Identity()   
+        
+        if model_cfg.get("mlp_head", False):
+            self.head = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(in_features, in_features // 2),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=dropout),
+                nn.Linear(in_features // 2, num_classes),
+            )
+        else:
+            self.head = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(in_features, num_classes),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x : (B, T, C, H, W)  — standard RGB frames
-        Returns:
-            logits : (B, num_classes)
-        """
         b, t, c, h, w = x.shape
+        x = x.view(b * t, c, h, w)                                    
 
-        # Fold time into batch dimension for the 2-D CNN
-        x = x.view(b * t, c, h, w)                                    # (B*T, C, H, W)
-
-        # Run backbone stages with TCN inserted at the configured stage
         for idx, stage in enumerate(self.backbone.features):
             x = stage(x)
-            if self.intermediate_tcn is not None and idx == self.tcn_insert_after:
-                x = self.intermediate_tcn(x)    # residual — dims unchanged
+            if self.intermediate_tcn is not None and idx == getattr(self, 'tcn_insert_after', -1):
+                x = self.intermediate_tcn(x)    
 
-        # Spatial pooling
         feats = nn.functional.adaptive_avg_pool2d(x, (1, 1))
-        feats = feats.flatten(1)                                       # (B*T, 1280)
-
-        # Temporal consensus (average over frames)
-        feats = feats.view(b, t, -1).mean(dim=1)                      # (B, 1280)
+        feats = feats.flatten(1)                                       
+        feats = feats.view(b, t, -1).mean(dim=1)                      
 
         return self.head(feats)

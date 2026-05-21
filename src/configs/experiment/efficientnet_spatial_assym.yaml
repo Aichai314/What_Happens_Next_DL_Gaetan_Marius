@@ -11,17 +11,13 @@ model:
   new_tsm: true
   tsm_insert_after: 4
   mlp_head: false
-  dropout: 0.5
-  stochastic_depth: 0.35
-  # use_tcn: true
-  # tcn_insert_after: 5
-  # tcn_kernel_size: 3
-  # tcn_num_layers: 2
+  dropout: 0.4
+  stochastic_depth: 0.3
 
 training:
   augmentation: true
   mixup_alpha: 0.3
-  epochs: 50
+  epochs: 40
   batch_size: 64
   num_workers: 12
   lr: 1e-3
@@ -30,9 +26,10 @@ training:
   scheduler: warmup_cosine
   warmup_epochs: 5
   label_smoothing: 0.2
-  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnetb0.pt
-  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnetb0.pt
-  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnetb0.pt
+  assymetric_smoothing: true
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet_spatial.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet_spatial.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_spatial.pt
 
 dataset:
   num_frames: 4

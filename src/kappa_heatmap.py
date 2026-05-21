@@ -18,6 +18,7 @@ from omegaconf import DictConfig
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import cohen_kappa_score
+from scipy.stats import entropy
 from itertools import combinations
 from evaluate_ensemble import _get_cache_path
 
@@ -53,6 +54,30 @@ def compute_kappa_matrix(
         kappa_matrix[j, i] = kappa  # symmetric
 
     return kappa_matrix, model_names
+
+def compute_kl_matrix(
+    model_probs: dict[str, np.ndarray],
+    epsilon: float = 1e-10
+) -> tuple[np.ndarray, list[str]]:
+    """
+    Moyenne symétrique de la divergence KL entre distributions.
+    Capture la diversité au niveau des probabilités, pas juste des prédictions.
+    """
+    model_names = list(model_probs.keys())
+    M = len(model_names)
+    kl_matrix = np.zeros((M, M))
+
+    for i, j in combinations(range(M), 2):
+        p = model_probs[model_names[i]] + epsilon
+        q = model_probs[model_names[j]] + epsilon
+        # KL symétrique : moyenne de KL(p||q) et KL(q||p)
+        kl_pq = entropy(p.T, q.T).mean()
+        kl_qp = entropy(q.T, p.T).mean()
+        sym_kl = (kl_pq + kl_qp) / 2
+        kl_matrix[i, j] = sym_kl
+        kl_matrix[j, i] = sym_kl
+
+    return kl_matrix, model_names
 
 
 def plot_kappa_heatmap(
@@ -106,30 +131,79 @@ def plot_kappa_heatmap(
     plt.show()
 
 
-def flag_redundant_models(
+def plot_kappa_kl_heatmap(
     kappa_matrix: np.ndarray,
+    kl_matrix: np.ndarray,
     model_names: list[str],
-    threshold: float = 0.90,
+    output_path: str | None = "kappa_kl_heatmap.png",
 ) -> None:
     """
-    Prints pairs of models whose kappa exceeds the redundancy threshold.
+    Plots both Cohen Kappa and KL divergence matrices side by side.
 
     Args:
-        threshold: kappa above this value → models considered redundant
+        kappa_matrix : (M, M) symmetric Cohen Kappa matrix
+        kl_matrix    : (M, M) symmetric KL divergence matrix
+        model_names  : list of model names for axis labels
+        output_path  : if provided, saves the figure to this path
     """
+    # Shorten names for readability (keep filename stem only)
     short_names = [n.split("/")[-1].replace(".pt", "") for n in model_names]
-    M = len(model_names)
-    found = False
 
-    print(f"\nRedundant pairs (kappa > {threshold}):")
-    for i, j in combinations(range(M), 2):
-        k = kappa_matrix[i, j]
-        if k > threshold:
-            print(f"  ⚠  {short_names[i]}  ↔  {short_names[j]}  (κ = {k:.3f})")
-            found = True
+    fig, axes = plt.subplots(
+        1, 2,
+        figsize=(max(16, len(model_names) * 1.8), max(6, len(model_names) * 0.8))
+    )
 
-    if not found:
-        print("  ✓ No redundant pairs found.")
+    mask = np.zeros_like(kappa_matrix, dtype=bool)
+    mask[np.triu_indices_from(mask, k=1)] = True  # mask upper triangle (redundant)
+
+    # Plot Kappa matrix
+    sns.heatmap(
+        kappa_matrix,
+        mask=mask,
+        annot=True,
+        fmt=".3f",
+        cmap="RdYlGn_r",   # red = high agreement (redundant), green = low (diverse)
+        vmin=0.0,
+        vmax=1.0,
+        linewidths=0.5,
+        linecolor="white",
+        xticklabels=short_names,
+        yticklabels=short_names,
+        ax=axes[0],
+        annot_kws={"size": 8},
+        cbar_kws={"label": "Cohen Kappa"},
+    )
+    axes[0].set_title("Cohen Kappa — lower is more diverse", fontsize=12, pad=14)
+    axes[0].set_xticklabels(short_names, rotation=45, ha="right", fontsize=8)
+    axes[0].set_yticklabels(short_names, rotation=0, fontsize=8)
+
+    # Plot KL divergence matrix
+    sns.heatmap(
+        kl_matrix,
+        mask=mask,
+        annot=True,
+        fmt=".3f",
+        cmap="YlOrRd",     # higher KL = more diverse
+        linewidths=0.5,
+        linecolor="white",
+        xticklabels=short_names,
+        yticklabels=short_names,
+        ax=axes[1],
+        annot_kws={"size": 8},
+        cbar_kws={"label": "Symmetric KL Divergence"},
+    )
+    axes[1].set_title("Symmetric KL Divergence — higher is more diverse", fontsize=12, pad=14)
+    axes[1].set_xticklabels(short_names, rotation=45, ha="right", fontsize=8)
+    axes[1].set_yticklabels(short_names, rotation=0, fontsize=8)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+        print(f"Heatmap saved to {output_path}")
+
+    plt.show()
 
 def load_model_probabilities(model_path: str, val_dir: str) -> np.ndarray:
     """
@@ -162,30 +236,44 @@ def main(cfg: DictConfig) -> None:
     # =========================================================
     # CONFIGURATION: Define your Kaggle Roster here
     # =========================================================
+    # my_models = [
+    #     "checkpoints/best_model_tsm_36-03.pt",
+    #     "checkpoints/tsm_full_tdm_34-50.pt",
+    #     "checkpoints/low_overfit_tdm_6channels_34-94.pt",
+    #     "checkpoints/tsm_6channels_stem_37-95.pt",
+    #     "checkpoints/attn_stage2_best_38-99.pt",
+    #     "checkpoints/best_model_cnn_lstm_30-75.pt",
+    #     "checkpoints/best_model_trn_29-53.pt",
+    #     "checkpoints/best_model_x3d_xs_29-44.pt",
+    #     "checkpoints/best_model_r2plus1d_30-97.pt",
+    #     #"checkpoints/best_model_cnn_gru_30-54.pt",
+    #     #"checkpoints/cnn_lstm_6channels_35-20.pt",
+    #     "checkpoints/convnext_best_27-04.pt",
+    #     "checkpoints/timesformer_best_24-33.pt",
+    #     #"checkpoints/mobilenet_spatial_expert_38-09.pt",
+    #     "checkpoints/mobilenet_motion_expert_33-92.pt",
+    #     #"checkpoints/tsm_tdm_6channels_36_28.pt",
+    #     #"checkpoints/mobilenet_6channels_37-58.pt",
+    #     "checkpoints/efficientnet_6channels_39-78.pt",
+    #     "checkpoints/efficientnet_attn_40-79.pt",
+    #     "checkpoints/efficientnet_spatial_40-96.pt",
+    #     "checkpoints/best_model_cnn_lstm_31-71.pt",
+    #     "checkpoints/best_model_trn_32-90.pt",
+    #     "checkpoints/efficientnet_tdm_39-87.pt",
+    # ]
     my_models = [
-        "checkpoints/best_model_tsm_36-03.pt",
-        "checkpoints/tsm_full_tdm_34-50.pt",
-        "checkpoints/low_overfit_tdm_6channels_34-94.pt",
-        "checkpoints/tsm_6channels_stem_37-95.pt",
         "checkpoints/attn_stage2_best_38-99.pt",
         "checkpoints/best_model_cnn_lstm_30-75.pt",
-        "checkpoints/best_model_trn_29-53.pt",
-        "checkpoints/best_model_x3d_xs_29-44.pt",
-        "checkpoints/best_model_r2plus1d_30-97.pt",
-        #"checkpoints/best_model_cnn_gru_30-54.pt",
-        #"checkpoints/cnn_lstm_6channels_35-20.pt",
-        "checkpoints/convnext_best_27-04.pt",
-        "checkpoints/timesformer_best_24-33.pt",
-        #"checkpoints/mobilenet_spatial_expert_38-09.pt",
-        "checkpoints/mobilenet_motion_expert_33-92.pt",
-        #"checkpoints/tsm_tdm_6channels_36_28.pt",
-        #"checkpoints/mobilenet_6channels_37-58.pt",
-        "checkpoints/efficientnet_6channels_39-78.pt",
-        "checkpoints/efficientnet_attn_40-79.pt",
-        "checkpoints/efficientnet_spatial_40-96.pt",
-        "checkpoints/best_model_cnn_lstm_31-71.pt",
         "checkpoints/best_model_trn_32-90.pt",
-        "checkpoints/efficientnet_tdm_39-87.pt",
+        "checkpoints/best_model_x3d_xs_29-64.pt",
+        "checkpoints/R2Plus1D_high_ov_34-29.pt",
+        "checkpoints/convnext_best_27-04.pt",
+        "checkpoints/timesformer_best_24-98.pt",
+        "checkpoints/efficientnetb0_motion_37-33.pt",
+        "checkpoints/efficientnetb0_spatial_41-59.pt",
+        "checkpoints/efficientnetb0_spatial_assym_41-11.pt",
+        "checkpoints/efficientnetb0_6chan_39-93.pt",
+        "checkpoints/efficientnetb0_tdn_40-13.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())
@@ -195,9 +283,8 @@ def main(cfg: DictConfig) -> None:
     }
     
     kappa_matrix, model_names = compute_kappa_matrix(model_probs)
-    plot_kappa_heatmap(kappa_matrix, model_names, output_path="kappa_heatmap.png")
-    flag_redundant_models(kappa_matrix, model_names, threshold=0.90)
-
+    kl_matrix, _ = compute_kl_matrix(model_probs)
+    plot_kappa_kl_heatmap(kappa_matrix, kl_matrix, model_names, output_path="kappa_kl_heatmap.png")
 
 # ── Example usage ────────────────────────────────────────────────────────────
 

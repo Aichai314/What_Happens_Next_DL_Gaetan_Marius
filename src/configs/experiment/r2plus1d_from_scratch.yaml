@@ -9,13 +9,13 @@ model:
 
 training:
   augmentation: true
-  mixup_alpha: 0.4
+  mixup_alpha: 0.3
   epochs: 50           # Extended to 50 for the long overnight run
   batch_size: 48       # About the limit with 25% margin for safety
   num_workers: 12
   lr: 1e-3             # Dropped down because batch size is smaller
   optimizer: adamw
-  weight_decay: 5e-2  
+  weight_decay: 1e-1  
   scheduler: warmup_cosine
   warmup_epochs: 5
   label_smoothing: 0.2
@@ -28,5 +28,8 @@ dataset:
 
 augmentation:
   temporal_drop_prob: 0.1
-  grayscale_prob: 0.2
-  blur_prob: 0.15
+  grayscale_prob: 0.3
+  blur_prob: 0.2
+  erasing_prob: 0.3
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

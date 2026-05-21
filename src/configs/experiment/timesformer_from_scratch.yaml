@@ -5,20 +5,20 @@ defaults:
 
 model:
   pretrained: false
-  dropout: 0.2
+  dropout: 0.3
 
 training:
   augmentation: true
   mixup_alpha: 0.4
-  epochs: 100
+  epochs: 150
   batch_size: 256      # 40% margin for safety
   num_workers: 12
   lr: 2e-4
   optimizer: adamw
-  weight_decay: 5e-2 
+  weight_decay: 1e-1 
   scheduler: warmup_cosine
   warmup_epochs: 10
-  label_smoothing: 0.15
+  label_smoothing: 0.2
   checkpoint_path: ${hydra:runtime.cwd}/best_model_timesformer.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_timesformer.pt
   # resume_from: ${hydra:runtime.cwd}/latest_model_timesformer.pt
@@ -28,5 +28,8 @@ dataset:
 
 augmentation:
   temporal_drop_prob: 0.1
-  grayscale_prob: 0.4
+  grayscale_prob: 0.3
   blur_prob: 0.2
+  erasing_prob: 0.3
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

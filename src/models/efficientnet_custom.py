@@ -15,8 +15,9 @@ from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 import torchvision.models as tv_models
-from torchvision.models.efficientnet import MBConv
+from torchvision.models.efficientnet import MBConv, FusedMBConv
 from utils import two_stage_trainer
+from models.efficientnet_tsm import _inject_tsm_safely, _inject_tdm_safely
 
 # ── Stage channel map ────────────────────────────────────────────────────────
  
@@ -316,15 +317,18 @@ class TemporalHead(nn.Module):
 # THE NEW TEMPORAL ATTENTION HEAD
 # =========================================================
 class TemporalSelfAttention(nn.Module):
-    def __init__(self, embed_dim: int, num_frames: int, num_heads: int = 8, dropout: float = 0.5, attention_dropout: float = 0.3):
+    def __init__(self, embed_dim: int, num_frames: int, 
+                 num_heads: int = 8, dropout: float = 0.3, 
+                 attention_dropout: float = 0.1, num_classes: int = 33):
         super().__init__()
-        # 1. Positional Embedding: Crucial so the attention knows frame order
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_frames, embed_dim))
-        
-        # 2. Multi-Head Attention: batch_first=True expects (B, T, C)
-        self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=attention_dropout, batch_first=True)
-        
-        # 3. Standard Transformer block normalization and MLP
+        self.pos_embed = nn.Parameter(
+            torch.randn(1, num_frames, embed_dim) * 0.02
+        )
+        self.attention = nn.MultiheadAttention(
+            embed_dim, num_heads, 
+            dropout=attention_dropout, 
+            batch_first=True
+        )
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = nn.Sequential(
@@ -332,25 +336,25 @@ class TemporalSelfAttention(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(embed_dim * 2, embed_dim),
-            nn.Dropout(dropout)
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+        # Classifier head
+        self.head = nn.Sequential(
+            nn.LayerNorm(embed_dim),  # norme finale avant classification
+            nn.Linear(embed_dim, num_classes)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: (B, T, C)
+        # Pre-norm attention
+        normed = self.norm1(x)
+        attn_out, _ = self.attention(normed, normed, normed)
+        x = x + attn_out
         
-        # Add temporal position information
-        x = x + self.pos_embed
+        # Pre-norm MLP
+        x = x + self.mlp(self.norm2(x))
         
-        # Self-Attention
-        attn_out, _ = self.attention(x, x, x)
-        x = self.norm1(x + attn_out)
-        
-        # Feed Forward Network
-        mlp_out = self.mlp(x)
-        x = self.norm2(x + mlp_out)
-        
-        # Instead of returning all T frames, we now pool the *attended* features
-        return x.mean(dim=1)
+        return self.head(x.mean(dim=1))
 
 # ── Main model ───────────────────────────────────────────────────────────────
 
@@ -373,47 +377,83 @@ class EfficientNetTemporalHead(nn.Module):
         super().__init__()
         self.num_frames = num_frames
 
+        in_channels = int(model_cfg.get("in_channels", 3))
         fold_div = int(model_cfg.get("fold_div", 8))
         use_tdm  = bool(model_cfg.get("use_tdm", False))
         use_tcn          = bool(model_cfg.get("use_tcn", False))
         tcn_insert_after = int(model_cfg.get("tcn_insert_after", 5))
         tcn_kernel_size  = int(model_cfg.get("tcn_kernel_size", 3))
         tcn_num_layers   = int(model_cfg.get("tcn_num_layers", 2))
-        use_b1           = bool(model_cfg.get("efficientnet_b1", False))
-        use_b3           = bool(model_cfg.get("efficientnet_b3", False))
+        stochastic_depth = float(model_cfg.get("stochastic_depth", 0.2))
         backbone_path    = model_cfg.get("backbone_path", None)
+        
+        # Architecture toggles
+        use_b1   = bool(model_cfg.get("efficientnet_b1", False))
+        use_b3   = bool(model_cfg.get("efficientnet_b3", False))
+        use_v2_s = bool(model_cfg.get("efficientnet_v2_s", False))
 
-        # ── Backbone (no pretrained weights per competition rules) ──────────
-        if use_b1:
-            weights       = tv_models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
+        # ── Backbone ────────────────────────────────────────────────────────
+        if use_v2_s:
+            weights = tv_models.EfficientNet_V2_S_Weights.DEFAULT if pretrained else None
+            self.backbone = tv_models.efficientnet_v2_s(weights=weights)
+        elif use_b1:
+            weights = tv_models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
             self.backbone = tv_models.efficientnet_b1(weights=weights)
         elif use_b3:
-            weights       = tv_models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
+            weights = tv_models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
             self.backbone = tv_models.efficientnet_b3(weights=weights)
         else:
-            weights       = tv_models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
-            self.backbone = tv_models.efficientnet_b0(weights=weights)
+            weights = tv_models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
+            self.backbone = tv_models.efficientnet_b0(weights=weights,
+                                                      stochastic_depth_prob=stochastic_depth)
 
+        # ── Stem Surgery (Dynamic Input Channels) ─────────────────────────
+        if in_channels != 3:
+            # The stem conv is always the first layer of the first Conv2dNormActivation block
+            original_conv = self.backbone.features[0][0]
+            self.backbone.features[0][0] = nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=original_conv.out_channels,
+                kernel_size=original_conv.kernel_size,
+                stride=original_conv.stride,
+                padding=original_conv.padding,
+                bias=original_conv.bias is not None
+            )
+        
         # ── TSM + optional TDM injection ────────────────────────────────────
         for feat_idx, stage in enumerate(self.backbone.features):
             if not isinstance(stage, nn.Sequential):
                 continue
-            deep = feat_idx >= 5   # features[5], [6], [7] are deep stages
+            deep = feat_idx >= 5
+            apply_tsm = feat_idx >= model_cfg.get("tsm_insert_after", 4)
             for sub_idx, block in enumerate(stage):
-                if not isinstance(block, MBConv):
+                # V2 compatibility: Check for both MBConv and FusedMBConv
+                if not isinstance(block, (MBConv, FusedMBConv)):
                     continue
-                if model_cfg.get("new_tsm", False):
-                    # TSM in every MBConv (correct position: before depthwise conv)
-                    _inject_tsm_into_mbconv(block, num_frames, fold_div)
+                
+                if model_cfg.get("new_tsm", False) and apply_tsm:
+                    _inject_tsm_safely(block, num_frames, fold_div)
                 else:
-                    # Original TSM implementation: wraps entire MBConv from outside (incorrect)
                     stage[sub_idx] = nn.Sequential(
                         TemporalShift(num_frames, fold_div),
                         block,
                     )
-                # TDM only in deep layers and only if enabled
+                
                 if use_tdm and deep:
-                    _inject_tdm_into_mbconv(block, num_frames)
+                    _inject_tdm_safely(block, num_frames)
+
+        # ── Intermediate TCN ─────────────────────────────────────────────────
+        if use_tcn:
+            tcn_channels          = _EFFICIENTNET_CHANNELS.get(tcn_insert_after, 256) # Fallback for V2
+            self.intermediate_tcn = IntermediateTCN(
+                channels    = tcn_channels,
+                n_segment   = num_frames,
+                kernel_size = tcn_kernel_size,
+                num_layers  = tcn_num_layers,
+            )
+            self.tcn_insert_after = tcn_insert_after
+        else:
+            self.intermediate_tcn = None
         
         if backbone_path:
             print(f"--> Loading strictly backbone from: {backbone_path}")
@@ -424,12 +464,15 @@ class EfficientNetTemporalHead(nn.Module):
             backbone_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items() if 'backbone' in k}
             self.backbone.load_state_dict(backbone_dict, strict=False)
  
-        in_features    = self.backbone.classifier[1].in_features
-        self.backbone.classifier = nn.Identity()   # remove original head
+        # ── Classifier head ──────────────────────────────────────────────────
+        in_features = self.backbone.classifier[1].in_features
+        if model_cfg.get("new_tsm", False):
+            self.backbone.classifier = nn.Identity() 
         
         # ── Temporal head ───────────────────────────────────────────────────
 
         if model_cfg.get("attention_head", False):
+            print("--> Using Temporal Self-Attention head")
             self.temporal_head = TemporalSelfAttention(
                 embed_dim=in_features,
                 num_frames=num_frames,
@@ -481,17 +524,16 @@ class EfficientNetTemporalHead(nn.Module):
             logits : (B, num_classes)
         """
         b, t, c, h, w = x.shape
+        x = x.view(b * t, c, h, w)                                    
 
-        # Fold time into batch dimension for the 2-D CNN
-        x = x.view(b * t, c, h, w)                                    # (B*T, C, H, W)
+        for idx, stage in enumerate(self.backbone.features):
+            x = stage(x)
+            if self.intermediate_tcn is not None and idx == getattr(self, 'tcn_insert_after', -1):
+                x = self.intermediate_tcn(x)    
 
-        feats = self.backbone.features(x)
-
-        # Spatial pooling
-        feats = nn.functional.adaptive_avg_pool2d(feats, 1)
+        feats = nn.functional.adaptive_avg_pool2d(x, (1, 1))
         feats = feats.flatten(1)                                       # (B*T, 1280)
 
-        # Temporal consensus (average over frames)
-        feats = feats.view(b, t, -1)                 # (B, 1280)
+        feats = feats.view(b, t, -1)                 # (B, T, 1280)
 
         return self.temporal_head(feats)

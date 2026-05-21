@@ -6,8 +6,9 @@ defaults:
 
 model:
   pretrained: false
-  in_channels: 6
+  in_channels: 3
   transformer: false
+  dropout: 0.35
 
 training:
   epochs: 40
@@ -16,20 +17,23 @@ training:
   optimizer: adamw
   weight_decay: 1e-1
   scheduler: warmup_cosine
-  warmup_epochs: 4
-  mixup_alpha: 0.4
+  warmup_epochs: 5
+  mixup_alpha: 0.3
   label_smoothing: 0.2
   augmentation: true
-  num_workers: 4
+  num_workers: 12
   checkpoint_path: ${hydra:runtime.cwd}/best_model_convnext.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_convnext.pt
-  resume_from: ${hydra:runtime.cwd}/best_model_convnext_save.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_convnext_save.pt
 
 dataset:
   num_frames: 4
-  use_frame_differencing: true
+  use_frame_differencing: false
 
 augmentation:
   temporal_drop_prob: 0.1
-  grayscale_prob: 0.5
-  blur_prob: 0.3
+  grayscale_prob: 0.3
+  blur_prob: 0.2
+  erasing_prob: 0.3
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

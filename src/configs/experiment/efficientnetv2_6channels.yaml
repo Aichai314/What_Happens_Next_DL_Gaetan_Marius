@@ -7,24 +7,23 @@ defaults:
 model:
   pretrained: false
   fold_div: 8
-  in_channels: 3
+  in_channels: 6
+  dropout: 0.2
   new_tsm: true
-  tsm_insert_after: 4
-  dropout: 0.4
-  stochastic_depth: 0.3
+  efficientnet_v2_s: true
 
 training:
   augmentation: true
   mixup_alpha: 0.4
-  epochs: 50
-  batch_size: 64
+  epochs: 60
+  batch_size: 32
   num_workers: 12
   lr: 1e-3
   optimizer: adamw
   weight_decay: 1e-1
   scheduler: warmup_cosine
-  warmup_epochs: 5
-  label_smoothing: 0.2
+  warmup_epochs: 6
+  label_smoothing: 0.15
   checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet.pt
   # resume_from: ${hydra:runtime.cwd}/latest_model_efficientnet.pt
@@ -32,11 +31,10 @@ training:
 dataset:
   num_frames: 4
   use_frame_differencing: true
-  only_motion: true
 
 augmentation:
   temporal_drop_prob: 0.1
-  grayscale_prob: 0.3
+  grayscale_prob: 0.15
   blur_prob: 0.2
   erasing_prob: 0.3
   rotation_prob: 0.4

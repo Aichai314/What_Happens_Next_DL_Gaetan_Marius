@@ -41,6 +41,7 @@ from models.cnn3d_transformer import CNN3DTransformer
 from models.efficientnet_attention import EfficientNetAttention
 from models.efficientnet_custom import EfficientNetTemporalHead
 from models.efficientnet_tsm import EfficientNet_TSM
+from models.efficientnet_tdn import EfficientNet_TDN
 from models.first_cnn import FirstCNN
 from models.convnext_tsm_transformer import ConvNeXtTSMTransformer, ConvNeXtTSMPure
 from models.convnext_tsm import ConvNeXt_TSM
@@ -58,7 +59,7 @@ from models.r2plus1d_baseline import R2Plus1DBaseline
 from models.vit_small import ViTSmallTransformer
 from models.trn_baseline import TRN
 from models.x3d_xs import X3DXSBaseline
-from utils import VideoTransform, build_transforms, set_seed, split_train_val
+from utils import VideoTransform, build_transforms, set_seed, split_train_val, AsymmetricSmoothedCrossEntropy
 
 
 def log_run(cfg: DictConfig, best_val_accuracy: float, duration_s: float, results_path: Path) -> None:
@@ -169,13 +170,20 @@ def build_model(cfg: DictConfig) -> nn.Module:
         )
 
     if name == "convnext_tsm":
-        if not cfg.model.get("transformer", True):
+        if cfg.model.get("v2_nano", False):
             return ConvNeXt_TSM(
                 model_cfg=cfg.model,
                 num_classes=num_classes,
                 num_frames=num_frames,
                 pretrained=pretrained,
                 dropout=float(cfg.model.get("dropout", 0.2)),
+            )
+        elif not cfg.model.get("transformer", False):
+            return ConvNeXtTSMPure(
+                num_classes=num_classes,
+                num_frames=num_frames,
+                in_channels=int(cfg.model.get("in_channels", 3)),
+                fold_div=int(cfg.model.get("fold_div", 8)),
             )
         return ConvNeXtTSMTransformer(
             num_classes=num_classes,
@@ -286,6 +294,14 @@ def build_model(cfg: DictConfig) -> nn.Module:
             llrd=float(cfg.model.get("llrd", 0.85)),
             head_dropout=float(cfg.model.get("head_dropout", 0.5)),
         )
+    if name == "efficientnet_tdn":
+        return EfficientNet_TDN(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+            dropout=float(cfg.model.get("dropout", 0.2)),
+        )
 
     raise ValueError(f"Unknown model.name: {name}")
 
@@ -299,6 +315,7 @@ def train_one_epoch(
     scaler: torch.cuda.amp.GradScaler,
     mixup_fn: Optional[v2.MixUp] = None,
     accumulation_steps: int = 1,
+    assymetric_smoothing: bool = False,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
@@ -469,10 +486,6 @@ def main(cfg: DictConfig) -> None:
 
     model = build_model(cfg).to(device)
     
-    # log="all" tells it to track BOTH weights and gradients.
-    # log_freq=100 means it updates the web dashboard every 100 batches.
-    wandb.watch(model, log="all", log_freq=100)
-    
     # --- Mixup Configuration ---
     mixup_alpha = float(cfg.training.get("mixup_alpha", 0.0))
     mixup_fn = None
@@ -480,7 +493,14 @@ def main(cfg: DictConfig) -> None:
         mixup_fn = v2.MixUp(alpha=mixup_alpha, num_classes=int(cfg.model.num_classes))
 
     label_smoothing = float(cfg.training.get("label_smoothing", 0.0))
-    loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    if cfg.training.get("assymetric_smoothing", False):
+        print("Using asymmetric label smoothing with base_smooth =", label_smoothing)
+        loss_fn = AsymmetricSmoothedCrossEntropy(
+            base_smooth=label_smoothing, 
+            num_classes=int(cfg.model.num_classes)
+        ).to(device)
+    else:
+        loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     
     # --- Optimizer Configuration (Adam vs AdamW) ---
     base_lr = float(cfg.training.lr)
@@ -491,7 +511,7 @@ def main(cfg: DictConfig) -> None:
         backbone_lr_factor = float(cfg.training.get("backbone_lr_factor", 0.1))
         params = model.get_param_groups(base_lr, backbone_lr_factor)
     else:
-        params = model.parameters()
+        params = [p for p in model.parameters() if p.requires_grad]
 
     if opt_type == "adamw":
         optimizer = torch.optim.AdamW(params, lr=base_lr, weight_decay=weight_decay)

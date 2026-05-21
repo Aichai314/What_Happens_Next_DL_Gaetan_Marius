@@ -9,27 +9,29 @@ model:
   pretrained: false
   fold_div: 8
   in_channels: 3
-  dropout: 0.2
+  attention_head: true
+  attention_heads: 4
+  dropout: 0.3
   new_tsm: true
-  efficientnet_b1: false
-  backbone_path: ${hydra:runtime.cwd}/best_model_efficientnet_spatial_low_ov.pt
+  tsm_insert_after: 4
+  backbone_path: ${hydra:runtime.cwd}/best_model_efficientnetb0_25ov.pt
   backbone_lr_factor: 0.1
 
 training:
   augmentation: true
-  mixup_alpha: 0.2
+  mixup_alpha: 0.35
   epochs: 30
   batch_size: 64
   num_workers: 12
-  lr: 3e-4
+  lr: 1e-4
   optimizer: adamw
-  weight_decay: 2e-3
+  weight_decay: 1e-2
   scheduler: warmup_cosine
-  warmup_epochs: 2
+  warmup_epochs: 5
   label_smoothing: 0.1
-  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet_tcn.pt
-  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet_tcn.pt
-  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_tcn.pt
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientnet_attn.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientnet_attn.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_efficientnet_attn.pt
 
 dataset:
   num_frames: 4
