@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import hydra
 import gc
 from pathlib import Path
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from omegaconf import OmegaConf
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
@@ -21,7 +21,7 @@ import hashlib
 # Import your existing utilities
 from train import build_model
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
-from utils import TTAWeightedMean, VideoTransform, TTATransform
+from utils import LearnedWeightedMean, VideoTransform, TTATransform, ExpertAttentionMeta
 
 
 def _get_cache_dir() -> Path:
@@ -114,29 +114,30 @@ def precompute_tta_logits(model, val_dir, val_samples, cfg, device):
     # Return as (N_tta, N_samples, num_classes)
     return torch.stack(all_tta_logits, dim=0), val_labels
 
-def train_tta_weights(
+def train_weights(
     model_name: str,
-    logits: torch.Tensor,
+    input: torch.Tensor,
     val_labels: torch.Tensor,
+    logit: bool = True,
     n_epochs: int = 200,
     lr: float = 1e-2,
     device: str = 'cpu',
 ):
     """
-    tta_logits_per_model : dict model_name -> (N_tta, N_samples, num_classes)
+    input : (N_input, N_samples, num_classes) can be either TTA logits (N_tta, N_samples, num_classes) or expert probs (N_experts, N_samples, num_classes)
     val_labels           : (N_samples,)
     
-    Retourne TTAWeightedMean entraîné
+    Retourne LearnedWeightedMean entraîné
     """
     
     # logits : (N_tta, N_samples, num_classes) - fixed input data
     # val_labels : (N_samples,) - targets
-    logits = logits.to(device).detach()  # Ensure on device and detached
+    input = input.to(device).detach()  # Ensure on device and detached
     val_labels = val_labels.to(device).long()  # Ensure correct dtype and device
     
-    N_tta = logits.shape[0]
-    tta_module = TTAWeightedMean(n_transforms=N_tta).to(device)
-    optimizer = torch.optim.Adam(tta_module.parameters(), lr=lr)
+    N_input = input.shape[0]
+    model = LearnedWeightedMean(n_input=N_input).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     
     # logits déjà précalculés → entraînement très rapide
     with torch.enable_grad():
@@ -144,23 +145,68 @@ def train_tta_weights(
             optimizer.zero_grad()
             
             # combined : (N_samples, num_classes)
-            combined = tta_module(list(logits))
-            loss = F.cross_entropy(combined, val_labels)
+            combined = model(list(input))
+            if logit:
+                loss = F.cross_entropy(combined, val_labels)
+            else: # input is already probabilities, so we take log for NLL loss
+                true_class_probs = combined[range(combined.shape[0]), val_labels]
+                loss = -torch.log(true_class_probs + 1e-9).mean()
             
             loss.backward()
             optimizer.step()
     
     # Affiche les poids finaux pour inspection
-    final_weights = F.softmax(tta_module.weights, dim=0)
-    print(f"{model_name} TTA weights: {final_weights.detach().cpu().numpy()}")
+    final_weights = F.softmax(model.weights, dim=0)
+    print(f"{model_name} Learned weights: {final_weights.detach().cpu().numpy()}")
     
-    return tta_module
+    return model
+
+def train_expert_attention_meta(
+    logits: torch.Tensor,
+    val_labels: torch.Tensor,
+    n_epochs: int = 200,
+    lr: float = 1e-2,
+    device: str = 'cpu',
+):
+    """
+    logits : (N_experts, N_samples, num_classes)
+    val_labels : (N_samples,)
+    
+    Retourne ExpertAttentionMeta entraîné
+    """
+    
+    logits = logits.to(device).detach()  # Ensure on device and detached
+    val_labels = val_labels.to(device).long()  # Ensure correct dtype and device
+    
+    N_experts = logits.shape[0]
+    meta_model = ExpertAttentionMeta(n_experts=N_experts).to(device)
+    optimizer = torch.optim.AdamW(meta_model.parameters(), lr=lr, weight_decay=1e-1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
+    
+    
+    with torch.enable_grad():
+        iteration_bar = trange(n_epochs, desc="Training Attention")
+        for epoch in iteration_bar:
+            optimizer.zero_grad()
+            
+            combined = meta_model(logits)
+            loss = F.cross_entropy(combined, val_labels)
+            
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            
+            iteration_bar.set_postfix({"loss": loss.item()})
+
+    meta_model.eval()
+    
+    return meta_model
 
 def predict_with_tta(
     model,
     frames_pil,
     tta_transforms,
-    tta_module: TTAWeightedMean,
+    tta_module: LearnedWeightedMean,
     device,
 ):
     model.eval()
@@ -234,14 +280,14 @@ def _create_xgboost_model(hyperparams: Optional[Dict] = None) -> XGBClassifier:
         hyperparams = {}
     {'max_depth': 4, 'learning_rate': 0.04, 'n_estimators': 500, 'subsample': 0.7, 'colsample_bytree': 0.5, 'min_child_weight': 5, 'lambda': 4, 'alpha': 0.75}
     defaults = {
-        'max_depth': 4,
+        'max_depth': 2,
         'learning_rate': 0.04,
         'n_estimators': 500,
-        'subsample': 0.7,
+        'subsample': 0.65,
         'colsample_bytree': 0.5,
         'min_child_weight': 5,
-        'lambda': 4,
-        'alpha': 0.75,
+        'lambda': 20.0,
+        'alpha': 2.0,
         'early_stopping_rounds': 30,
         'objective': 'multi:softprob',
         'random_state': 42,
@@ -273,16 +319,23 @@ def _optimize_xgboost_hyperparams_optuna(
     def objective(trial: optuna.Trial) -> float:
         # Suggest hyperparameters
         params = {
-            'max_depth': trial.suggest_int('max_depth', 2, 3),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
-            'n_estimators': trial.suggest_int('n_estimators', 100, 500),
-            'subsample': trial.suggest_float('subsample', 0.5, 0.8),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.75),
-            'min_child_weight': trial.suggest_int('min_child_weight', 5, 30),
-            # Force L2 and L1 regularization not to be too low to prevent overfitting on validation set
-            'lambda': trial.suggest_float('lambda', 5.0, 30.0),
-            'alpha': trial.suggest_float('alpha', 1.0, 5.0),
+            # ==========================================
+            # STRUCTURAL PRIORS (Hardcoded Defenses)
+            # ==========================================
+            'max_depth': 2,
+            'subsample': 0.65,
+            'lambda': 20.0,
+            'alpha': 2.0,
             'early_stopping_rounds': 30,
+            
+            # ==========================================
+            # OPTUNA SEARCH SPACE (Only 5 Dimensions!)
+            # ==========================================
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.05),
+            'n_estimators': trial.suggest_int('n_estimators', 200, 600),
+            'min_child_weight': trial.suggest_int('min_child_weight', 2, 20),
+            'gamma': trial.suggest_float('gamma', 1.0, 5.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.2, 0.6),
         }
         
         model = _create_xgboost_model(params)
@@ -349,26 +402,40 @@ def find_best_alpha(
     
     return best_alpha, best_acc
 
-class CombinedLRXGBModel:
+class CombinedLRAttentionModel:
     """
-    Wrapper that combines LogisticRegression and XGBoost predictions
+    Wrapper that combines LogisticRegression and ExpertAttentionMeta predictions
     using a learnable alpha parameter.
     """
-    def __init__(self, lr_model, xgb_model, alpha: float):
+    def __init__(self, lr_model, attention_model, alpha: float, num_classes: int, num_experts: int):
         self.lr_model = lr_model
-        self.xgb_model = xgb_model
+        self.attention_model = attention_model
         self.alpha = alpha
+        self.num_classes = num_classes
+        self.num_experts = num_experts
     
     def predict(self, X):
-        lr_probs = self.lr_model.predict_proba(X)
-        xgb_probs = self.xgb_model.predict_proba(X)
-        combined = self.alpha * lr_probs + (1 - self.alpha) * xgb_probs
-        return combined.argmax(1)
+        return self.predict_proba(X).argmax(1)
     
     def predict_proba(self, X):
+        lr_probs_raw = self.lr_model.predict_proba(X)
         lr_probs = self.lr_model.predict_proba(X)
-        xgb_probs = self.xgb_model.predict_proba(X)
-        return self.alpha * lr_probs + (1 - self.alpha) * xgb_probs
+        
+        # Pad Logistic Regression output to 33 columns in case a class is entirely missing
+        # Reshape X for the Attention Model
+        lr_probs = np.zeros((X.shape[0], self.num_classes))
+        lr_probs[:, self.lr_model.classes_] = lr_probs_raw
+        
+        # Reshape X for the Attention Model
+        X_tensor = torch.tensor(X, dtype=torch.float32).reshape(
+            X.shape[0], self.num_experts, self.num_classes
+        ).transpose(0, 1)
+        
+        self.attention_model.eval()
+        with torch.no_grad():
+            attention_probs = self.attention_model(X_tensor).numpy()
+            
+        return self.alpha * lr_probs + (1 - self.alpha) * attention_probs
 
 @torch.no_grad()
 def evaluate_and_stack_n_models(
@@ -468,7 +535,7 @@ def evaluate_and_stack_n_models(
                 if TTA:
                     print(f"Loading cached TTA weights from {weights_cache_path.name}...")
                     # Initialize a blank module with our 6 standard transforms
-                    tta_module = TTAWeightedMean(n_transforms=6) 
+                    tta_module = LearnedWeightedMean(n_input=6) 
                     tta_module.load_state_dict(torch.load(weights_cache_path, map_location='cpu'))
                     tta_modules.append(tta_module)
                 else:
@@ -492,7 +559,7 @@ def evaluate_and_stack_n_models(
             
             # 2. Train the TTA blending weights (Fast CPU optimization)
             model_name = Path(ckpt_path).stem
-            tta_module = train_tta_weights(model_name, tta_logits, tta_labels, n_epochs=200, lr=1e-2)
+            tta_module = train_weights(model_name, tta_logits, tta_labels, n_epochs=200, lr=1e-2)
             
             # 3. Apply the learned weights to get the final blended logits
             tta_module.eval()
@@ -605,24 +672,25 @@ def evaluate_and_stack_n_models(
             # print("\nUsing default hyperparameters (no Bayesian optimization)")
             print("\nUsing stored hyperparameters from previous Bayesian optimization (+ regularized a little more for safety)")
             # Bayesian optim parameters:
-            meta_model = _create_xgboost_model({'learning_rate': 0.08525, 'n_estimators': 213, 'subsample': 0.62746, 'colsample_bytree': 0.4003, 'min_child_weight': 5, 'lambda': 5.32948, 'alpha': 4.2095})
+            meta_model = _create_xgboost_model({'learning_rate': 0.048939493196935975, 'n_estimators': 567, 'min_child_weight': 9, 'gamma': 1.2776574578150808, 'colsample_bytree': 0.20371327111730006})
             print(f"Default Hyperparameters:")
-            print(f"   max_depth: 4")
+            print(f"   max_depth: 2")
             print(f"   learning_rate: 0.04")
             print(f"   n_estimators: 500")
-            print(f"   subsample: 0.7")
+            print(f"   subsample: 0.65")
             print(f"   colsample_bytree: 0.5")
-            print(f"   lambda (L2): 4")
-            print(f"   alpha (L1): 0.75")
+            print(f"   lambda (L2): 20")
+            print(f"   alpha (L1): 2")
     
     elif meta_learner == 'both':
         print("\n" + "="*50)
-        print("Meta-Learner: Combined XGBoost + LogisticRegression")
+        print("Meta-Learner: Combined Attention + LogisticRegression")
         print("="*50)
         print("\nWill train both models and combine with find_best_alpha")
-        print("Using XGBoost hyperparameters from previous Bayesian optimization")
+
         # xgb_params = {'max_depth': 3, 'learning_rate': 0.047835958212693014, 'n_estimators': 498, 'subsample': 0.6943002505190707, 'colsample_bytree': 0.4224184464008965, 'min_child_weight': 9, 'lambda': 21.58031280816208, 'alpha': 1.62159974968791} # 49.73%
-        xgb_params = {'max_depth': 3, 'learning_rate': 0.041457793421589034, 'n_estimators': 465, 'subsample': 0.6584760556126513, 'colsample_bytree': 0.5170739168034588, 'min_child_weight': 14, 'lambda': 19.219909328630457, 'alpha': 1.52774573314708851} # 49.64%
+        # xgb_params = {'max_depth': 3, 'learning_rate': 0.041457793421589034, 'n_estimators': 465, 'subsample': 0.6584760556126513, 'colsample_bytree': 0.5170739168034588, 'min_child_weight': 14, 'lambda': 19.219909328630457, 'alpha': 1.52774573314708851} # 49.64%
+        # xgb_params = {'learning_rate': 0.048939493196935975, 'n_estimators': 567, 'min_child_weight': 9, 'gamma': 1.2776574578150808, 'colsample_bytree': 0.20371327111730006}
     
     # Run the Cross Validation
     print("\nEvaluating Meta-Learner with 5-Fold Stratified Cross-Validation...")
@@ -637,57 +705,112 @@ def evaluate_and_stack_n_models(
         # Calculate the magical "Blind Run" target
         optimal_trees = int(np.mean(best_iters) * 1.05)  # Add 5% buffer to prevent underfitting
         print(f"\n🧠 Calculated Optimal Trees from CV: {optimal_trees}")
+    elif meta_learner == 'weighted_mean' or meta_learner == 'attention':
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores_list = []
+        
+        # Calculate number of classes per expert to reshape flattened features
+        num_classes = X_meta.shape[1] // len(ckpt_paths)
+        
+        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_meta, y_true_encoded)):
+            X_train_np, X_val_np = X_meta[train_idx], X_meta[val_idx]
+            y_train, y_val = y_true[train_idx], y_true[val_idx]
+
+            # Convert numpy arrays to torch tensors and reshape for LearnedWeightedMean
+            # X_train_np: (N_train, N_experts * num_classes) -> (N_experts, N_train, num_classes)
+            X_train = torch.tensor(X_train_np, dtype=torch.float32).reshape(
+                X_train_np.shape[0], len(ckpt_paths), num_classes
+            ).transpose(0, 1)
+            y_train_torch = torch.tensor(y_train, dtype=torch.long)
+            
+            if meta_learner == 'weighted_mean':
+                fold_model: LearnedWeightedMean = train_weights("WeightedMean", X_train, y_train_torch, logit=False, n_epochs=200, lr=1e-2)
+            else:  # meta_learner == 'attention'
+                fold_model: ExpertAttentionMeta = train_expert_attention_meta(X_train, y_train_torch, n_epochs=100, lr=2e-2)
+
+            # Convert validation data to torch tensors and reshape
+            # X_val_np: (N_val, N_experts * num_classes) -> (N_experts, N_val, num_classes)
+            X_val = torch.tensor(X_val_np, dtype=torch.float32).reshape(
+                X_val_np.shape[0], len(ckpt_paths), num_classes
+            ).transpose(0, 1)
+            if meta_learner == 'weighted_mean':
+                X_val = list(X_val)  # LearnedWeightedMean expects a list of tensors per expert
+            
+            fold_model.eval()
+            # Forward pass returns (N_val, num_classes)
+            val_probs = fold_model(X_val).numpy()
+            val_preds = val_probs.argmax(1)
+            fold_acc = (val_preds == y_val).mean()
+            cv_scores_list.append(fold_acc.item())
+        
+        cv_scores = np.array(cv_scores_list)
+
     elif meta_learner == 'both':
         # Manual k-fold CV for combined model
         combined_scores = []
         lr_only_scores = []
-        xgb_only_scores = []
+        attention_only_scores = []
         best_alphas = []
-        xgb_best_iters = []  # Track best iteration for each fold
         
-        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_meta, y_true_encoded)):
+        num_experts = len(ckpt_paths)
+        num_classes = X_meta.shape[1] // num_experts
+        
+        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_meta, y_true)):
             X_train, X_val = X_meta[train_idx], X_meta[val_idx]
-            y_train, y_val = y_true_encoded[train_idx], y_true_encoded[val_idx]
+            y_train, y_val = y_true[train_idx], y_true[val_idx]
             
             # Train LR on this fold
             lr_fold = LogisticRegression(max_iter=2000, C=0.3, class_weight=None)
             lr_fold.fit(X_train, y_train)
             
-            # Train XGB on this fold (without eval_set to avoid early stopping issues in CV)
-            xgb_fold = _create_xgboost_model(xgb_params)
-            xgb_fold.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-            xgb_best_iters.append(xgb_fold.best_iteration)  # Track stopping point
+            # Reshape for Attention
+            X_train_attention = torch.tensor(X_train, dtype=torch.float32).reshape(
+                X_train.shape[0], num_experts, num_classes
+            ).transpose(0, 1)
+            y_train_torch = torch.tensor(y_train, dtype=torch.long)
             
-            # Get predictions on validation fold
-            lr_probs = lr_fold.predict_proba(X_val)
-            xgb_probs = xgb_fold.predict_proba(X_val)
+            # Train Attention Model
+            attention_fold: ExpertAttentionMeta = train_expert_attention_meta(
+                X_train_attention, y_train_torch, n_epochs=100, lr=2e-2
+            )
+
+            # Reshape Val for Attention
+            X_val_attention = torch.tensor(X_val, dtype=torch.float32).reshape(
+                X_val.shape[0], num_experts, num_classes
+            ).transpose(0, 1)
+    
+            attention_fold.eval()
+            with torch.no_grad():
+                attention_probs = attention_fold(X_val_attention).numpy()
             
-            # Combine using find_best_alpha (verbose=False for cleaner output)
-            best_alpha, best_acc = find_best_alpha(lr_probs, xgb_probs, y_val, verbose=False)
+            # Extract the raw probabilities (e.g. 32 columns if 1 class is missing)
+            lr_probs_raw = lr_fold.predict_proba(X_val)
+
+            # Pad it safely to 33 columns based on the explicitly seen classes
+            lr_probs = np.zeros((X_val.shape[0], num_classes))
+            lr_probs[:, lr_fold.classes_] = lr_probs_raw
+            
+            # Combine using find_best_alpha
+            best_alpha, best_acc = find_best_alpha(lr_probs, attention_probs, y_val, verbose=False)
             
             lr_acc = (lr_probs.argmax(1) == y_val).mean()
-            xgb_acc = (xgb_probs.argmax(1) == y_val).mean()
+            attention_acc = (attention_probs.argmax(1) == y_val).mean()
             
             combined_scores.append(best_acc)
             lr_only_scores.append(lr_acc)
-            xgb_only_scores.append(xgb_acc)
+            attention_only_scores.append(attention_acc)
             best_alphas.append(best_alpha)
             
-            print(f"   Fold {fold_idx + 1}: Combined={best_acc:.4f}, LR={lr_acc:.4f}, XGB={xgb_acc:.4f}, α={best_alpha:.2f}")
+            print(f"   Fold {fold_idx + 1}: Combined={best_acc:.4f}, LR={lr_acc:.4f}, Attention={attention_acc:.4f}, α={best_alpha:.2f}")
         
         cv_scores = np.array(combined_scores)
         lr_only_scores = np.array(lr_only_scores)
-        xgb_only_scores = np.array(xgb_only_scores)
+        attention_only_scores = np.array(attention_only_scores)
         best_alphas = np.array(best_alphas)
-        xgb_best_iters = np.array(xgb_best_iters)
-        
-        # Calculate optimal trees for XGB in final training
-        optimal_xgb_trees = int(np.mean(xgb_best_iters) * 1.05)  # Add 5% buffer
         
         print(f"\n   LR Only Mean:  {lr_only_scores.mean():.4f} (±{lr_only_scores.std():.4f})")
-        print(f"   XGB Only Mean: {xgb_only_scores.mean():.4f} (±{xgb_only_scores.std():.4f})")
+        print(f"   Attention Only Mean: {attention_only_scores.mean():.4f} (±{attention_only_scores.std():.4f})")
         print(f"   Avg Best Alpha: {best_alphas.mean():.2f}")
-        print(f"   XGB Optimal Trees: {optimal_xgb_trees}")
     else:
         # Logistic Regression doesn't use early stopping, so standard CV is fine
         cv_scores = cross_val_score(
@@ -724,26 +847,43 @@ def evaluate_and_stack_n_models(
         # Train blindly on 100% of the data!
         meta_model.fit(X_meta, y_true_encoded, verbose=False)
         print(f"Final Model: Trained blindly on 100% data for exactly {optimal_trees} trees.")
-    elif meta_learner == 'both':
-        # Train both models on full data
-        lr_final = LogisticRegression(max_iter=2000, C=0.3, class_weight=None)
-        lr_final.fit(X_meta, y_true_encoded)
+    elif meta_learner == 'weighted_mean' or meta_learner == 'attention':
+        # Train final LearnedWeightedMean on 100% of validation data
+        # Reshape X_meta for LearnedWeightedMean: (N_samples, N_experts * num_classes) -> (N_experts, N_samples, num_classes)
+        num_classes = X_meta.shape[1] // len(ckpt_paths)
+        X_meta_tensor = torch.tensor(X_meta, dtype=torch.float32).reshape(
+            X_meta.shape[0], len(ckpt_paths), num_classes
+        ).transpose(0, 1)
+        y_meta_tensor = torch.tensor(y_true, dtype=torch.long)
         
-        # Use optimal trees from CV for final XGB training
-        xgb_final_params = xgb_params.copy()
-
-        xgb_final_params['early_stopping_rounds'] = None  # Disable early stopping for final training
-        xgb_final_params['n_estimators'] = optimal_xgb_trees
-        xgb_final = _create_xgboost_model(xgb_final_params)
-        xgb_final.fit(X_meta, y_true_encoded, verbose=False)
+        if meta_learner == 'weighted_mean':
+            meta_model = train_weights("WeightedMean_Final", X_meta_tensor, y_meta_tensor, logit=False, n_epochs=200, lr=1e-2)
+        elif meta_learner == 'attention':
+            meta_model = train_expert_attention_meta(X_meta_tensor, y_meta_tensor, n_epochs=100, lr=2e-2)
+        print(f"Final Model: Trained on 100% of validation data with learned weighted averaging")
+    elif meta_learner == 'both':
+        num_experts = len(ckpt_paths)
+        num_classes = X_meta.shape[1] // num_experts
+        
+        # Train LR on full data
+        lr_final = LogisticRegression(max_iter=2000, C=0.3, class_weight=None)
+        lr_final.fit(X_meta, y_true)
+        
+        # Train Attention on full data
+        X_meta_tensor = torch.tensor(X_meta, dtype=torch.float32).reshape(
+            X_meta.shape[0], num_experts, num_classes
+        ).transpose(0, 1)
+        y_meta_tensor = torch.tensor(y_true, dtype=torch.long)
+        
+        attention_final = train_expert_attention_meta(X_meta_tensor, y_meta_tensor, n_epochs=100, lr=2e-2)
         
         # Use the true, unbiased mean alpha from the Out-Of-Fold CV
         best_alpha_final = best_alphas.mean()
               
         # Create the combined model
-        meta_model = CombinedLRXGBModel(lr_final, xgb_final, best_alpha_final)
+        meta_model = CombinedLRAttentionModel(lr_final, attention_final, best_alpha_final, num_classes, num_experts)
         
-        print(f"Final Model: Combined LR+XGB with α={best_alpha_final:.2f}, XGB trees={optimal_xgb_trees}")
+        print(f"Final Model: Combined LR+Attention with α={best_alpha_final:.2f}")
     else:
         # LogisticRegression on full validation set
         meta_model.fit(X_meta, y_true_encoded)
@@ -759,18 +899,21 @@ def main(cfg: DictConfig) -> None:
     # CONFIGURATION: Define your Kaggle Roster here
     # =========================================================
     my_models = [
-        # "checkpoints/timesformer_best_24-98.pt",
-        # "checkpoints/attn_stage2_best_38-99.pt",
-        # "checkpoints/best_model_cnn_lstm_30-75.pt",
-        # "checkpoints/best_model_trn_32-90.pt",
-        # "checkpoints/best_model_x3d_xs_29-64.pt",
-        # "checkpoints/R2Plus1D_high_ov_34-29.pt",
-        "checkpoints/convnext_best_27-04.pt",
+        "checkpoints/timesformer_best_24-98.pt",
+        "checkpoints/attn_stage2_best_38-99.pt",
+        "checkpoints/best_model_cnn_lstm_30-75.pt",
+        "checkpoints/best_model_trn_32-90.pt",
+        "checkpoints/best_model_x3d_xs_29-64.pt",
+        "checkpoints/R2Plus1D_high_ov_34-29.pt",
+        "checkpoints/convnextv2_nano_30-36.pt",
         "checkpoints/efficientnetb0_motion_37-33.pt",
         "checkpoints/efficientnetb0_spatial_41-59.pt",
         "checkpoints/efficientnetb0_spatial_assym_41-11.pt",
         "checkpoints/efficientnetb0_6chan_39-93.pt",
         "checkpoints/efficientnetb0_tdn_40-13.pt",
+        "checkpoints/efficientformer_tsm_attn_35-67.pt",
+        "checkpoints/coatnet_tsm_37-21.pt",
+        "checkpoints/mae_small_phase2_22-22.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())
@@ -786,43 +929,48 @@ def main(cfg: DictConfig) -> None:
     
     # Example 1: Default - LogisticRegression with L2 regularization
     # Fast, lightweight, good baseline
-    meta_model, _, tta_modules = evaluate_and_stack_n_models(
-        ckpt_paths=my_models,
-        val_dir=val_dir,
-        meta_learner='logistic',
-        TTA=True,    )
+    # meta_model, _, tta_modules = evaluate_and_stack_n_models(
+    #     ckpt_paths=my_models,
+    #     val_dir=val_dir,
+    #     meta_learner='logistic',
+    #     TTA=True,
+    # )
     
     # Example 2: XGBoost with default hyperparameters (tuned for 264 features)
     # Faster than Bayesian optimization, uses good defaults
-    # On first run: computes and caches logits (~10 min)
-    # On subsequent runs: loads from cache (~1 min)
     # meta_model, _, tta_modules = evaluate_and_stack_n_models(
     #     ckpt_paths=my_models,
     #     val_dir=val_dir,
     #     meta_learner='xgboost',
     #     use_bayesian_optimization=False,
+    #     bayesian_optimization_trials=75,
     #     use_cache=True  # Set to False to recompute logits
     # )
     
-    # Example 3: Combined XGBoost + LogisticRegression
+    # Example 3: Combined Attention + LogisticRegression
     # Trains both models and combines with find_best_alpha
-    # meta_model, _, tta_modules = evaluate_and_stack_n_models(
+    meta_model, _, tta_modules = evaluate_and_stack_n_models(
+        ckpt_paths=my_models,
+        val_dir=val_dir,
+        meta_learner='both',
+        use_cache=True,
+        TTA=True
+    )
+    
+    # Example 4: Simple Weighted Mean (simple gradient-based meta-learner)
+    # meta_model, _, _ = evaluate_and_stack_n_models(
     #     ckpt_paths=my_models,
     #     val_dir=val_dir,
-    #     meta_learner='both',
+    #     meta_learner='weighted_mean',
     #     use_cache=True,
     #     TTA=True
     # )
     
-    # Example 4: XGBoost with Bayesian Optimization (find best hyperparams)
-    # Slower but can improve accuracy by optimizing for your specific ensemble
-    # Runtime: ~45 minutes for 125 trials with 5-fold CV (after logits are cached)
-    # meta_model, _, tta_modules = evaluate_and_stack_n_models(
+    # Example 5: Expert Attention Meta-Learner (more complex gradient-based meta-learner)
+    # meta_model, _, _ = evaluate_and_stack_n_models(
     #     ckpt_paths=my_models,
     #     val_dir=val_dir,
-    #     meta_learner='xgboost',
-    #     use_bayesian_optimization=True,
-    #     bayesian_optimization_trials=125,
+    #     meta_learner='attention',
     #     use_cache=True,
     #     TTA=True
     # )

@@ -1,0 +1,49 @@
+# @package _global_
+# MAE + ViT —  Track A
+# python src/train.py experiment=mae_vit_base_phase2
+
+model:
+  name: vit_mae_phase2
+  num_classes: 33
+  pretrained: false
+  in_channels: 3
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+  drop_path: 0.2     # Stochastic Depth for the ViT backbone
+  attn_drop: 0.15     # Dropout inside attention matrices
+  proj_drop: 0.15     # Dropout in MLP blocks
+  head_drop: 0.3     # Dropout before the final classifier
+  # pretrained_encoder: ${hydra:runtime.cwd}/mae_base_final.pt # Path to the pretrained MAE encoder checkpoint
+
+training:
+  augmentation: true
+  mixup_alpha: 0.35
+  epochs: 80
+  batch_size: 32
+  num_workers: 12
+  lr: 2.5e-4
+  optimizer: adamw
+  weight_decay: 5e-2
+  scheduler: warmup_cosine
+  warmup_epochs: 5
+  label_smoothing: 0.15
+  gradient_clip: 0.1
+  backbone_lr_factor: 0.75 # Layer-wise Learning Rate Decay factor but we wrap it in backbone_lr_factor for backward compatibility
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_mae.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_mae.pt
+  resume_from: ${hydra:runtime.cwd}/best_model_mae.pt
+  use_ema: true         # Exponential Moving Average
+  use_swa: true         # Stochastic Weight Averaging
+  swa_start_epoch: 45   # Start SWA in the final ~25% of training
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.3
+  blur_prob: 0.15
+  erasing_prob: 0.3
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

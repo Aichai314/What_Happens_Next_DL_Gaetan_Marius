@@ -30,6 +30,7 @@ from torchvision.transforms import v2
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+from torch.optim.swa_utils import AveragedModel, SWALR, get_ema_multi_avg_fn
 from tqdm import tqdm
 
 from dataset.video_dataset import VideoFrameDataset, collect_video_samples
@@ -38,6 +39,8 @@ from models.cnn_baseline import CNNBaseline
 from models.cnn_gru import CNNGRU
 from models.cnn_lstm import CNNLSTM
 from models.cnn3d_transformer import CNN3DTransformer
+from models.coatnet_tsm import CoAtNet_Hybrid
+from models.efficientformer_tsm import EfficientFormer_Hybrid
 from models.efficientnet_attention import EfficientNetAttention
 from models.efficientnet_custom import EfficientNetTemporalHead
 from models.efficientnet_tsm import EfficientNet_TSM
@@ -49,6 +52,7 @@ from models.mobilenet_tsm import MobileNetV2_TSM
 from models.new_trn import TRNNew
 from models.resnext_tsm import ResNeXt50_TSM
 from models.timesformer_tiny import TimeSformerTiny
+from models.vit_mae_phase2 import ViT_MAE_Phase2
 from models.vit_transformer import ViTTransformer
 from models.TSM_resnet import TSMBaseline
 from models.videomae_v2 import VideoMAEFinetune
@@ -302,6 +306,28 @@ def build_model(cfg: DictConfig) -> nn.Module:
             pretrained=pretrained,
             dropout=float(cfg.model.get("dropout", 0.2)),
         )
+    if name == "coatnet_tsm":
+        return CoAtNet_Hybrid(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+        )
+    
+    if name == "vit_mae_phase2":
+        return ViT_MAE_Phase2(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+        )
+    
+    if name == "efficientformer_tsm":
+        return EfficientFormer_Hybrid(
+            model_cfg=cfg.model,
+            num_classes=num_classes,
+            num_frames=num_frames,
+            pretrained=pretrained,
+        )
 
     raise ValueError(f"Unknown model.name: {name}")
 
@@ -315,7 +341,8 @@ def train_one_epoch(
     scaler: torch.cuda.amp.GradScaler,
     mixup_fn: Optional[v2.MixUp] = None,
     accumulation_steps: int = 1,
-    assymetric_smoothing: bool = False,
+    gradient_clip: Optional[float] = None,
+    ema_model: Optional[AveragedModel] = None,
 ) -> Tuple[float, float]:
     """Returns (average loss, top-1 accuracy) on the training set for one epoch."""
     model.train()
@@ -346,7 +373,15 @@ def train_one_epoch(
         scaler.scale(loss).backward()
 
         if (step + 1) % accumulation_steps == 0 or (step + 1) == len(data_loader):
+            if gradient_clip is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
+            
             scaler.step(optimizer)
+            
+            if ema_model is not None:
+                ema_model.update_parameters(model)
+            
             wandb.log({
                 "train/loss": loss.item(),
                 "train/learning_rate": optimizer.param_groups[0]['lr'],
@@ -507,7 +542,8 @@ def main(cfg: DictConfig) -> None:
     weight_decay = float(cfg.training.get("weight_decay", 1e-4))
     opt_type = cfg.training.get("optimizer", "adam").lower()
 
-    if hasattr(model, "get_param_groups"):
+    if hasattr(model, "get_param_groups") and cfg.training.get("backbone_lr_factor") is not None:
+        print("Using separate learning rates for backbone and head with backbone_lr_factor =", cfg.training.backbone_lr_factor)
         backbone_lr_factor = float(cfg.training.get("backbone_lr_factor", 0.1))
         params = model.get_param_groups(base_lr, backbone_lr_factor)
     else:
@@ -537,6 +573,29 @@ def main(cfg: DictConfig) -> None:
         scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
     else:
         scheduler = None
+    
+    use_ema = bool(cfg.training.get("use_ema", False))
+    use_swa = bool(cfg.training.get("use_swa", False))
+    
+    ema_model = None
+    if use_ema:
+        # EMA maintains a continuous moving average of the weights (decay 0.999 is standard)
+        ema_avg_fn = get_ema_multi_avg_fn(0.999)
+        ema_model = AveragedModel(model, multi_avg_fn=ema_avg_fn)
+        print("--> EMA Tracking Enabled.")
+
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = int(cfg.training.get("swa_start_epoch", total_epochs)) # Defaults to never starting
+    
+    if use_swa:
+        # SWA maintains an average of the weights sampled at the end of every epoch
+        swa_model = AveragedModel(model)
+        # SWA requires a flat or cyclic learning rate, so we use a special SWA scheduler
+        # We set it to 10% of the base_lr to let the model settle into a wide minima
+        swa_lr = base_lr * 0.1 
+        swa_scheduler = SWALR(optimizer, swa_lr=swa_lr)
+        print(f"--> SWA Tracking Enabled (Starts at epoch {swa_start_epoch}).")
 
     best_val_accuracy = 0.0
     start_epoch = 0
@@ -555,18 +614,33 @@ def main(cfg: DictConfig) -> None:
         
         # 2. Restore Optimizer momentum
         if checkpoint.get("optimizer_state_dict") is not None:
+            fresh_lrs = [g['lr'] for g in optimizer.param_groups]
+            fresh_initial_lrs = [g.get('initial_lr', g['lr']) for g in optimizer.param_groups]
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            
+            if not cfg.training.get("resume_scheduler", True):
+                for i, param_group in enumerate(optimizer.param_groups):
+                    param_group['lr'] = fresh_lrs[i]
+                    param_group['initial_lr'] = fresh_initial_lrs[i]
         
         # 3. Restore Scheduler state (SAFE CHECK)
-        if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
+        if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None and cfg.training.get("resume_scheduler", True):
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            start_epoch = checkpoint["epoch"] + 1
 
         # Restore Scaler state (SAFE CHECK)
         if checkpoint.get("scaler_state_dict") is not None:
             scaler.load_state_dict(checkpoint["scaler_state_dict"])
         
+        # Restore EMA model if applicable
+        if use_ema and checkpoint.get("ema_state_dict") is not None and ema_model is not None:
+            ema_model.load_state_dict(checkpoint["ema_state_dict"])
+        
+        # Restore SWA model if applicable
+        if use_swa and checkpoint.get("swa_state_dict") is not None and swa_model is not None:
+            swa_model.load_state_dict(checkpoint["swa_state_dict"])
+        
         # 4. Fast-forward the timeline
-        start_epoch = checkpoint["epoch"] + 1
         best_val_accuracy = checkpoint.get("val_accuracy", 0.0)
         print(f"Successfully restored! Resuming at Epoch {start_epoch} with Best Acc {best_val_accuracy:.4f}")
 
@@ -578,9 +652,26 @@ def main(cfg: DictConfig) -> None:
     for epoch in epoch_bar:
         train_loss, train_acc = train_one_epoch(
             model, train_loader, loss_fn, optimizer, device, scaler, mixup_fn,
-            accumulation_steps=accumulation_steps,
+            accumulation_steps=accumulation_steps, gradient_clip=cfg.training.get("gradient_clip", None),
+            ema_model=ema_model
         )
-        val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
+        
+        if use_swa and epoch >= swa_start_epoch:
+            # PyTorch SWA requires you to update BatchNorm stats before evaluation
+            torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
+            val_loss, val_acc = evaluate_epoch(swa_model, val_loader, loss_fn, device)
+            print(f" (Eval on SWA Model) ", end="")
+            
+        elif use_ema:
+            # EMA also requires BN updates if your model uses standard BatchNorm2d
+            # (Note: ViTs use LayerNorm, which doesn't need this, but we run it for safety if CNNs are used)
+            torch.optim.swa_utils.update_bn(train_loader, ema_model, device=device)
+            val_loss, val_acc = evaluate_epoch(ema_model, val_loader, loss_fn, device)
+            print(f" (Eval on EMA Model) ", end="")
+            
+        else:
+            # Standard Evaluation
+            val_loss, val_acc = evaluate_epoch(model, val_loader, loss_fn, device)
         
         wandb.log({
             "val/loss": val_loss,
@@ -588,8 +679,14 @@ def main(cfg: DictConfig) -> None:
             "epoch": epoch + 1
         })
 
-        if scheduler is not None:
-            scheduler.step()
+        # --- Update Schedulers and Averaged Models ---
+        if use_swa and epoch >= swa_start_epoch:
+            # Once SWA starts, we switch from the Cosine scheduler to the SWA scheduler
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+        else:
+            if scheduler is not None:
+                scheduler.step()
 
         current_lr = optimizer.param_groups[0]["lr"]
         epoch_bar.set_postfix(
@@ -610,6 +707,8 @@ def main(cfg: DictConfig) -> None:
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),      # Critical: AdamW momentum
             "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+            "ema_state_dict": ema_model.state_dict() if use_ema else None,
+            "swa_state_dict": swa_model.state_dict() if use_swa else None,
             "scaler_state_dict": scaler.state_dict(),
             "num_classes": int(cfg.model.num_classes),
             "pretrained": bool(cfg.model.pretrained),

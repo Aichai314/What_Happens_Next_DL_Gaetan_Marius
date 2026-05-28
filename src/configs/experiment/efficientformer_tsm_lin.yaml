@@ -1,0 +1,45 @@
+# @package _global_
+# EfficientFormer + TSM + Linear head —  Track A
+# python src/train.py experiment=efficientformer_tsm_lin
+
+model:
+  name: efficientformer_tsm
+  num_classes: 33
+  pretrained: false
+  backbone: efficientformer_l1  # Or efficientformer_l3 for more capacity
+  fold_div: 8
+  in_channels: 3
+  use_tsm: true
+  dropout: 0.25
+  stochastic_depth: 0.2
+  head_type: linear # Highly recommended if training from scratch
+
+training:
+  augmentation: true
+  mixup_alpha: 0.2
+  epochs: 90
+  batch_size: 64
+  num_workers: 12
+  lr: 8e-4
+  optimizer: adamw
+  weight_decay: 5e-2
+  scheduler: warmup_cosine
+  warmup_epochs: 10
+  label_smoothing: 0.15
+  assymetric_smoothing: false
+  gradient_clip: 0.5
+  use_ema: true
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_efficientformer_tsm.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_efficientformer_tsm.pt
+  #resume_from: ${hydra:runtime.cwd}/latest_model_efficientformer_tsm.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.3
+  blur_prob: 0.15
+  erasing_prob: 0.3
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

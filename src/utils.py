@@ -325,16 +325,36 @@ class TTATransform:
             
         return transforms_list
 
-class TTAWeightedMean(nn.Module):
-    def __init__(self, n_transforms: int):
+class LearnedWeightedMean(nn.Module):
+    def __init__(self, n_input: int):
         super().__init__()
-        self.weights = nn.Parameter(torch.ones(n_transforms))
+        self.weights = nn.Parameter(torch.ones(n_input))
     
     def forward(self, logits_list):
         # logits_list : liste de (B, num_classes)
         w = F.softmax(self.weights, dim=0)
-        stacked = torch.stack(logits_list, dim=0)  # (N_tta, B, num_classes)
+        stacked = torch.stack(logits_list, dim=0)  # (N_input, B, num_classes)
         return (w[:, None, None] * stacked).sum(0)  # (B, num_classes)
+
+class ExpertAttentionMeta(nn.Module):
+    def __init__(self, n_experts=12, n_classes=33):
+        super().__init__()
+        # Reshape : (B, 12, 33) — chaque expert est un token
+        self.attention = nn.MultiheadAttention(
+            embed_dim=33,      # dimension par expert = n_classes
+            num_heads=3,       # 3 têtes sur 33 dims = 11 dims/tête
+            dropout=0.3,
+            batch_first=True
+        )
+        self.norm = nn.LayerNorm(33)
+        self.head = nn.Linear(33, n_classes)  # pooling → classification
+    
+    def forward(self, x):
+        # x : (12, B, 33) — log-probs reshapées
+        x = x.transpose(0, 1)  # (B, 12, 33)
+        attn_out, _ = self.attention(x, x, x)
+        x = self.norm(x + attn_out)
+        return self.head(x.mean(dim=1))  # (B, n_classes)
 
 
 def build_transforms(

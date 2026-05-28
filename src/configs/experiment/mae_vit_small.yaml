@@ -1,0 +1,35 @@
+# @package _global_
+# MAE + ViT —  Track A
+# python src/train.py experiment=mae_vit_small
+
+model:
+  pretrained: false
+  in_channels: 3
+  mask_ratio: 0.75
+
+training:
+  augmentation: true
+  mixup_alpha: 0
+  epochs: 400
+  batch_size: 128
+  num_workers: 12
+  base_lr: 1.5e-4
+  optimizer: adamw
+  weight_decay: 5e-2
+  scheduler: warmup_cosine
+  warmup_epochs: 40
+  label_smoothing: 0
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_mae.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_mae.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_mae.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0
+  grayscale_prob: 0
+  blur_prob: 0
+  erasing_prob: 0
+  rotation_prob: 0
+  rotation_degrees: 10.0

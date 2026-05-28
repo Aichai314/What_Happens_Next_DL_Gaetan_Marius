@@ -1,0 +1,48 @@
+# @package _global_
+# CoAtNet + TSM —  Track A
+# python src/train.py experiment=coatnet_tsm
+defaults:
+  - override /model: coatnet_tsm
+
+model:
+  pretrained: false
+  fold_div: 8
+  in_channels: 3
+  use_tsm: true
+  dropout: 0.4
+  stochastic_depth: 0.25
+  attention_dropout: 0.15
+  projection_dropout: 0.15
+  head_type: lstm
+  backbone: coatnet_0_rw_224
+  freeze_backbone: true
+  pretrained_backbone_path: ${hydra:runtime.cwd}/coatnet_tsm_37-21.pt # Path to the pretrained CoAtNet backbone checkpoint
+
+training:
+  augmentation: true
+  mixup_alpha: 0.35
+  epochs: 5
+  batch_size: 32
+  num_workers: 12
+  lr: 2e-4
+  optimizer: adamw
+  weight_decay: 1e-1
+  scheduler: warmup_cosine
+  warmup_epochs: 1
+  label_smoothing: 0.2
+  assymetric_smoothing: false
+  gradient_clip: 0.5
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_coatnet_tsm.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_coatnet_tsm.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_coatnet_tsm.pt
+
+dataset:
+  num_frames: 4
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.4
+  blur_prob: 0.2
+  erasing_prob: 0.4
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

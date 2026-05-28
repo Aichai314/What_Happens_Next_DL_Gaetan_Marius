@@ -155,12 +155,15 @@ def main(cfg: DictConfig) -> None:
         "checkpoints/best_model_trn_32-90.pt",
         "checkpoints/best_model_x3d_xs_29-64.pt",
         "checkpoints/R2Plus1D_high_ov_34-29.pt",
-        "checkpoints/convnext_best_27-04.pt",
+        "checkpoints/convnextv2_nano_30-36.pt",
         "checkpoints/efficientnetb0_motion_37-33.pt",
         "checkpoints/efficientnetb0_spatial_41-59.pt",
         "checkpoints/efficientnetb0_spatial_assym_41-11.pt",
         "checkpoints/efficientnetb0_6chan_39-93.pt",
         "checkpoints/efficientnetb0_tdn_40-13.pt",
+        #"checkpoints/efficientformer_tsm_attn_35-67.pt",
+        "checkpoints/coatnet_tsm_37-21.pt",
+        "checkpoints/mae_small_phase2_22-22.pt",
     ]
 
     # PHASE 1: Train Meta-Learner & TTA Weights
@@ -174,7 +177,7 @@ def main(cfg: DictConfig) -> None:
     meta_model, label_encoder, tta_modules = evaluate_and_stack_n_models(
         my_models,
         str(val_dir),
-        meta_learner='logistic',           # <--- Handles both LR and XGB dynamically
+        meta_learner='both',           # <--- Handles both LR and Attention dynamically
         use_bayesian_optimization=False,
         TTA=use_tta,
         use_cache=True
@@ -216,12 +219,33 @@ def main(cfg: DictConfig) -> None:
     print("PHASE 4: Generating Kaggle Predictions")
     print("="*50)
     
-    # MAGIC HAPPENS HERE: meta_model is the CombinedLRXGBModel object.
-    # Its .predict() method applies the learned alpha automatically!
-    predictions = label_encoder.inverse_transform(meta_model.predict(X_test))
+    if hasattr(meta_model, 'predict'):
+        # 1. Scikit-Learn Route (XGBoost / LR) -> Needs decoding
+        final_preds = meta_model.predict(X_test)
+        if meta_model.__class__.__name__ != 'CombinedLRAttentionModel': 
+            # Standard XGBoost or pure LR needs decoding
+            predictions = label_encoder.inverse_transform(final_preds)
+        else:
+            # The Combined model already outputs the correct class indices (0-32)
+            predictions = final_preds
+    else:
+        # 2. PyTorch Route -> Already in correct Kaggle format (0-32)
+        meta_model.eval()
+        with torch.no_grad():
+            num_classes = X_test.shape[1] // len(my_models)
+            X_test_tensor = torch.tensor(X_test, dtype=torch.float32).reshape(
+                X_test.shape[0], len(my_models), num_classes
+            ).transpose(0, 1)
+            
+            if meta_model.__class__.__name__ == 'LearnedWeightedMean':
+                probs = meta_model(list(X_test_tensor)).cpu().numpy()
+            else:
+                probs = meta_model(X_test_tensor).cpu().numpy()
+                
+            predictions = probs.argmax(axis=1) # Directly use these!
 
     # Save to CSV
-    output_path = Path("submissions/ensemble_submission_tta_logistic.csv")
+    output_path = Path("submissions/ensemble_submission_tta_both.csv")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with output_path.open("w", newline="", encoding="utf-8") as f:

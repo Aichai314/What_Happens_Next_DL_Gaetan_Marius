@@ -1,0 +1,40 @@
+# @package _global_
+# ConvNeXt-Nano + TSM — trained FROM SCRATCH (no ImageNet weights)
+# python src/train.py experiment=convnext_nano
+defaults:
+  - override /model: convnext_nano
+
+model:
+  pretrained: false
+  in_channels: 3
+  transformer: false
+  dropout: 0.4
+  stochastic_depth: 0.25
+
+training:
+  epochs: 70
+  batch_size: 64 # Should be near limit (around 3GB left)
+  lr: 6e-4
+  optimizer: adamw
+  weight_decay: 1e-1
+  scheduler: warmup_cosine
+  warmup_epochs: 5
+  mixup_alpha: 0.7
+  label_smoothing: 0.2
+  augmentation: true
+  num_workers: 12
+  checkpoint_path: ${hydra:runtime.cwd}/best_model_convnext.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_convnext.pt
+  # resume_from: ${hydra:runtime.cwd}/best_model_convnext_save.pt
+
+dataset:
+  num_frames: 4
+  use_frame_differencing: false
+
+augmentation:
+  temporal_drop_prob: 0.1
+  grayscale_prob: 0.5
+  blur_prob: 0.2
+  erasing_prob: 0.5
+  rotation_prob: 0.4
+  rotation_degrees: 10.0

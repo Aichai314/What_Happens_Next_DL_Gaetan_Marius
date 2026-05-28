@@ -133,7 +133,8 @@ class ConvNeXt_TSM(nn.Module):
             'convnextv2_nano', 
             pretrained=pretrained, 
             num_classes=0,       # Strips the default ImageNet classifier
-            global_pool='avg'    # Forces output to be a flat 1D feature vector
+            global_pool='avg',    # Forces output to be a flat 1D feature vector
+            drop_path_rate=model_cfg.get("stochastic_depth", 0.0)
         )
         in_features = self.backbone.num_features  # 640
         
