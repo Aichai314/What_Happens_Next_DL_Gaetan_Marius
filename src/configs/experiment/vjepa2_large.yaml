@@ -10,14 +10,22 @@ defaults:
 training:
   checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_vjepa2_large.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_vjepa2_large.pt
-  # Backbone was effectively frozen before (0.01 * 1e-4 = 1e-6, then *llrd^depth
-  # → 1e-7..1e-8): val acc saturated in 1 epoch then only crept +3pts (linear-probe
-  # regime). Unfreeze the encoder so it adapts to the 4-frame / new-domain data.
-  epochs: 12                      # backbone now learns → longer schedule pays off
+  # Aggressive unfreeze (bb 0.1, 12 ep) was tried and FAILED: train hit 87%,
+  # val stayed flat at ~70.5% with a 17pt gap = OVERFIT on a small set of
+  # FIXED frames (deterministic linspace sampling), NOT a "reversible classes"
+  # ceiling. Confusion-matrix analysis disproves the arrow-of-time theory:
+  # V-JEPA captures motion direction well (Folding 86%, Pulling L->R 92%,
+  # Turning upside down 88%, Moving up/down ~75%). The real bottleneck is
+  # real-vs-pretended pairs (Picking up 12% vs Pretending 45%; Putting into
+  # 61% vs Pretending 25%) - semantically harder: must see whether the object
+  # truly leaves the surface. Levers: stochastic per-epoch frame sampling
+  # (kills the fixed-frame overfit), full first-60% window coverage, and an
+  # object-motion signal (flow / RGB-diff) to separate real from pretend.
+  epochs: 4                       # val loss bottoms at epoch ~2; rest is overfit
   batch_size: 2
   gradient_accumulation_steps: 8  # effective batch = 16
   lr: 0.0001
-  backbone_lr_factor: 0.1         # 0.01 → 0.1 : top encoder LR ~1e-5 (main lever)
+  backbone_lr_factor: 0.03        # 0.1 → 0.03 : gentle adapt, minimal overfit
   optimizer: adamw
   weight_decay: 0.05
   scheduler: warmup_cosine        # warmup protects pretrained pooler from the

@@ -58,21 +58,28 @@ TEMPLATE_TO_FOLDER = {
 }
 
 
+def get_frame_count(video_path: Path) -> int:
+    """Estime le nombre de frames via ffmpeg -i (duration × fps)."""
+    result = subprocess.run(
+        ["ffmpeg", "-i", str(video_path)],
+        capture_output=True, text=True
+    )
+    info = result.stderr
+    dur_match = re.search(r'Duration:\s*(\d+):(\d+):([\d.]+)', info)
+    fps_match = re.search(r'(\d+(?:\.\d+)?)\s*fps', info)
+    if dur_match and fps_match:
+        h, m, s = int(dur_match.group(1)), int(dur_match.group(2)), float(dur_match.group(3))
+        duration = h * 3600 + m * 60 + s
+        fps = float(fps_match.group(1))
+        return max(1, int(duration * fps))
+    return 30  # fallback
+
+
 def extract_frames(args):
     video_path, out_dir, num_frames = args
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Compter les frames disponibles
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-count_packets", "-show_entries", "stream=nb_read_packets",
-         "-of", "csv=p=0", str(video_path)],
-        capture_output=True, text=True
-    )
-    try:
-        total = int(probe.stdout.strip())
-    except ValueError:
-        total = 30  # fallback
+    total = get_frame_count(video_path)
 
     n = min(num_frames, total)
     # Indices uniformément espacés
@@ -90,11 +97,20 @@ def extract_frames(args):
     return result.returncode == 0, str(video_path)
 
 
+def normalize_template(template: str) -> str:
+    """'Closing [something]' -> 'Closing something'"""
+    return re.sub(r'\[([^\]]+)\]', r'\1', template)
+
+
 def load_split(json_path):
     with open(json_path) as f:
         data = json.load(f)
-    return [(entry["id"], entry["template"]) for entry in data
-            if entry["template"] in TEMPLATE_TO_FOLDER]
+    result = []
+    for entry in data:
+        normalized = normalize_template(entry["template"])
+        if normalized in TEMPLATE_TO_FOLDER:
+            result.append((entry["id"], normalized))
+    return result
 
 
 def process_split(split_name, json_path, num_frames, workers):

@@ -329,6 +329,21 @@ def build_model(cfg: DictConfig) -> nn.Module:
             pretrained=pretrained,
         )
 
+    if name == "tdn_ssv2":
+        # Local import (deliberately NOT top-level like the other models): keeps
+        # the vendored TDN stack out of every non-TDN run, so other people's
+        # experiments can never be broken by it.
+        from models.tdn_ssv2 import TDNSSv2Finetune
+        return TDNSSv2Finetune(
+            num_classes=num_classes,
+            pretrained=pretrained,
+            pretrained_ckpt=cfg.model.get("pretrained_ckpt", None),
+            num_segments=int(cfg.model.get("num_segments", 8)),
+            frames_per_segment=int(cfg.model.get("frames_per_segment", 5)),
+            dropout=float(cfg.model.get("dropout", 0.5)),
+            head_dropout=float(cfg.model.get("head_dropout", 0.5)),
+        )
+
     raise ValueError(f"Unknown model.name: {name}")
 
 

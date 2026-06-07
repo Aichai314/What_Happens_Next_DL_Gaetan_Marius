@@ -49,6 +49,33 @@ def _get_labels_cache_path(val_dir: str) -> Path:
     cache_key = hashlib.md5(val_dir.encode()).hexdigest()
     return _get_cache_dir() / f"labels_{cache_key}.npy"
 
+
+def _print_expert_diag(expert_idx: int, probs: numpy.ndarray, y_true: numpy.ndarray,
+                       ckpt_path: str) -> None:
+    """
+    Print a meaningful per-expert diagnostic.
+
+    For full-class experts (probs has 33 columns), prints standalone accuracy.
+    For SPECIALISTS (probs has fewer columns than max(y_true)+1 — e.g. 9), argmax
+    would compare specialist indices (0..K-1) against challenge labels (0..32) and
+    yield a misleading near-zero number. We detect this and print the specialist's
+    confidence statistics instead — its contribution is via stacking, not standalone.
+    """
+    n_classes_expert = probs.shape[1]
+    n_classes_true = int(y_true.max()) + 1
+    if n_classes_expert == n_classes_true:
+        acc = accuracy_score(y_true, numpy.argmax(probs, axis=1))
+        print(f"Expert {expert_idx+1} accuracy on Validation Set: {acc:.4f}")
+    else:
+        # Specialist: argmax over K<33 indices is not comparable to 33-class y_true.
+        mean_top_prob = float(numpy.max(probs, axis=1).mean())
+        print(
+            f"Expert {expert_idx+1} is a SPECIALIST with {n_classes_expert} classes "
+            f"(ckpt={Path(ckpt_path).name}). Standalone accuracy not comparable to "
+            f"full-class experts. Mean top-1 softmax confidence = {mean_top_prob:.3f}. "
+            f"Its {n_classes_expert} columns become extra features for XGBoost."
+        )
+
 def _fit_with_early_stopping_balanced(
     model: XGBClassifier,
     X_train: numpy.ndarray,
@@ -346,22 +373,30 @@ def evaluate_and_stack_n_models(
                 if use_cache and labels_cache_path:
                     numpy.save(labels_cache_path, y_true)
                     print(f"Cached labels to {labels_cache_path.name}")
-            
-            print(f"Expert {i+1} accuracy on Validation Set: {accuracy_score(y_true, numpy.argmax(all_expert_probs[-1], axis=1)):.4f}")
+
+            _print_expert_diag(i, all_expert_probs[-1], y_true, ckpt_path)
             continue
         
         # 1. Load Model dynamically
-        ckpt = torch.load(ckpt_path, map_location=device)
+        # Always load checkpoint to CPU first — map_location=cuda triggers a device-side
+        # assert on some models (e.g. vjepa2 specialist) on PyTorch 2.11+/CUDA 12.8.
+        ckpt = torch.load(ckpt_path, map_location="cpu")
         cfg = OmegaConf.create(ckpt["config"])
-        model = build_model(cfg).to(device)
+        model_name = cfg.model.get("name", "")
+
+        # TDN has an unfixable CUDA async race condition in its group-conv MSE module
+        # on PyTorch 2.11+/CUDA 12.8. Run on CPU — ResNet50 is fast enough.
+        model_device = torch.device("cpu") if "tdn" in model_name.lower() else device
+        model = build_model(cfg)
         model.load_state_dict(ckpt["model_state_dict"])
+        model = model.to(model_device)
         model.eval()
 
         # 2. Setup Dataloader specific to this model's config
         use_imagenet_norm = cfg.model.get("pretrained", False)
         image_size = int(cfg.dataset.get("image_size", 224))
         transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=use_imagenet_norm, image_size=image_size)
-        
+
         num_frames = int(cfg.dataset.get("num_frames", 4))
         dataset = VideoFrameDataset(
             root_dir=val_dir,
@@ -369,18 +404,28 @@ def evaluate_and_stack_n_models(
             transform=transform,
             sample_list=val_samples
         )
-        
+
+        # Batch size: TDN runs on CPU (no VRAM concern, cap for RAM). Others: cap by model size.
+        if "tdn" in model_name.lower():
+            extract_bs = 32
+        elif num_frames >= 16 or image_size >= 256:
+            extract_bs = 2
+        elif num_frames > 8:
+            extract_bs = 16
+        else:
+            extract_bs = 64
         # shuffle=False is the most critical parameter here to ensure row alignment across N models
-        loader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=False, num_workers=4)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=extract_bs, shuffle=False, num_workers=4)
 
         # 3. Extract Logits
         model_probs = []
         model_labels = []
         
         for batch, labels in tqdm(loader, desc=f"Extracting Logits"):
-            batch = batch.to(device)
-            # Get logits and move to CPU immediately
+            batch = batch.to(model_device)
             logits = model(batch)
+            if model_device.type == "cuda":
+                torch.cuda.synchronize()
             probs = torch.softmax(logits, dim=1).cpu().numpy()
             model_probs.append(probs)
             
@@ -403,8 +448,8 @@ def evaluate_and_stack_n_models(
             if use_cache and labels_cache_path:
                 numpy.save(labels_cache_path, y_true)
                 print(f"Cached labels to {labels_cache_path.name}")
-        
-        print(f"Expert {i+1} accuracy on Validation Set: {accuracy_score(y_true, numpy.argmax(all_expert_probs[-1], axis=1)):.4f}")
+
+        _print_expert_diag(i, all_expert_probs[-1], y_true, ckpt_path)
 
         # 4. CRITICAL: Clear VRAM before loading the next expert
         del model
@@ -539,8 +584,13 @@ def main(cfg: DictConfig) -> None:
     # CONFIGURATION: Define your Kaggle Roster here
     # =========================================================
     my_models = [
-        "checkpoints/best_model_videomae_large_kinetics.pt",
-        "checkpoints/best_model_videomae_v2_ssv2.pt",
+        # vjepa2_large_t16 exclu: entraîné sur 16 frames (viole le budget 4f du test),
+        # crash CUDA illegal memory access sur val2 (4 frames répétées ≠ vrais 16f).
+        "/Data/marius.truquin/Model_checkpoints/best_model_tdn_ssv2.pt",              # TDN SSv2 (68.74% val)
+        "/Data/marius.truquin/Model_checkpoints/best_model_vjepa2_large_v1.pt",       # vjepa2 v1 (68.14% val)
+        "/Data/marius.truquin/Model_checkpoints/best_model_vjepa2_specialist.pt",     # vjepa2 specialist 9c (67.42% val)
+        "/Data/marius.truquin/Model_checkpoints/best_model_videomae_large_kinetics.pt",  # videomae kinetics (59.61% val)
+        "/Data/marius.truquin/Model_checkpoints/best_model_videomae_v2_ssv2_2.pt",       # videomae ssv2 (59.32% val)
     ]
 
 

@@ -1,4 +1,0 @@
-timestamp,duration_min,model,pretrained,num_classes,d_model,nhead,num_layers,lstm_hidden,dropout,epochs,batch_size,lr,optimizer,scheduler,num_frames,val_ratio,seed,best_val_acc,checkpoint
-2026-05-07 03:02:34,405.8,videomae_v2,True,33,,,,,,15,8,0.0001,adamw,warmup_cosine,16,0.2,42,0.5775,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/checkpoints/best_model_videomae_v2_ssv2.pt
-2026-05-07 13:15:09,108.7,videomae_large_kinetics,True,33,,,,,,40,8,0.0001,adamw,warmup_cosine,4,0.2,42,0.5924,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/checkpoints/best_model_videomae_large_kinetics.pt
-2026-05-07 17:31:06,365.6,videomae_v2,True,33,,,,,,30,8,0.0001,adamw,warmup_cosine,16,0.2,42,0.5932,/users/eleves-b/2024/marius.truquin/Documents/AAChallenge/What_Happens_Next_DL_Gaetan_Marius/checkpoints/best_model_videomae_v2_ssv2.pt

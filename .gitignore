@@ -220,3 +220,20 @@ wandb/
 
 # Ensemble cache
 .ensemble_cache/
+.search_cache/
+.submission_cache/
+
+# Hydra run output (auto-généré)
+.hydra/
+
+# Matériel annexe (rapport, soutenance, figures) — hors livrable code
+CLAUDE.md
+rapport_marius.md
+soutenance_marius.md
+soutenance_marius_court.md
+presentation_vjepa2_t16_marius.md
+*.pdf
+*.png
+*.svg
+check_length.py
+checkpoints/

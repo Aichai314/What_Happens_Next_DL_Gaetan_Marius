@@ -4,4 +4,4 @@ model:
   num_classes: 33
   pretrained: true
   llrd: 0.85
-  head_dropout: 0.3   # 0.5 → 0.3 : model underfits (train≈val), 0.5 caps it lower
+  head_dropout: 0.5   # back to 0.5 : unfreeze test proved it overfits, not underfits

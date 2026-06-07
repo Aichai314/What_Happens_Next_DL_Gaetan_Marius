@@ -1,0 +1,46 @@
+# @package _global_
+# TDN ResNet-50 (Something-Something V2 pretrained) — explicit-motion expert.
+#
+# Purpose: a genuinely DECORRELATED expert for the XGBoost stack. SSv2 is
+# motion-dominated; V-JEPA2/VideoMAE (RGB-appearance) collapse on real-vs-
+# pretended pairs ("did the object leave the surface?"). TDN models temporal
+# differences directly, so its errors should be uncorrelated -> stack lift.
+# Expect TDN solo BELOW V-JEPA2 (~55-62%); that is success here, not failure.
+#
+# Separate checkpoint path so it never overwrites the V-JEPA2 / VideoMAE runs.
+# python src/train.py experiment=tdn_ssv2
+defaults:
+  - override /model: tdn_ssv2
+
+training:
+  checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_tdn_ssv2.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_tdn_ssv2.pt
+  epochs: 6
+  batch_size: 2
+  gradient_accumulation_steps: 8     # effective batch = 16
+  lr: 0.0001
+  backbone_lr_factor: 0.05           # SSv2 features are already on-task -> gentle adapt, low overfit
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: warmup_cosine
+  warmup_epochs: 1
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.0
+
+dataset:
+  num_frames: 4         # HARD CONSTRAINT: the Kaggle test set has only 4 frames/video.
+                        # Train at the inference frame budget. ssv2_32f is used only as a
+                        # bigger VIDEO pool + per-epoch sampling variety, NEVER as more
+                        # test frames (training dense -> testing 4 = the mismatch trap).
+  image_size: 224       # TDN ResNet-50 native input size
+
+augmentation:
+  # ssv2_32f has ~20 frames/video: draw a fresh random 4 each epoch (mimics the
+  # test's "4 random frames"). Strong temporal aug, train==test budget, and it
+  # kills the fixed-frame 1-epoch overfit. Requires augmentation.random_temporal_sampling.
+  random_temporal_sampling: true
+  temporal_drop_prob: 0.0   # only 4 frames at a time -> dropping one is info loss, not regul
+  grayscale_prob: 0.2
+  blur_prob: 0.2

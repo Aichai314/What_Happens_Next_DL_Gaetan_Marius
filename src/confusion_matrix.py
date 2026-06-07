@@ -98,6 +98,44 @@ def print_per_class_table(cm: torch.Tensor, class_names: List[str]) -> None:
     print(f"{'Overall accuracy':<50} {'':>10} {overall.item():>7.1%}\n")
 
 
+def print_top_confusions(cm: torch.Tensor, class_names: List[str], top_k: int = 30) -> None:
+    """Print the largest off-diagonal (true -> predicted) error cells, plus the
+    dominant error sink per class. Used to define specialist confusion groups."""
+    per_class_total = cm.sum(dim=1).float().clamp(min=1)
+    confusions = []
+    n = cm.shape[0]
+    for t in range(n):
+        for p in range(n):
+            if t == p or cm[t, p].item() == 0:
+                continue
+            cnt = int(cm[t, p].item())
+            confusions.append((cnt, cnt / per_class_total[t].item(), t, p))
+    confusions.sort(reverse=True)
+
+    print(f"\n--- Top {top_k} confusions (TRUE → PREDICTED), by absolute count ---")
+    print(f"{'True':<38} {'→ Predicted':<38} {'N':>5} {'% of true':>9}")
+    print("-" * 94)
+    for cnt, frac, t, p in confusions[:top_k]:
+        print(f"{class_names[t]:<38} → {class_names[p]:<36} {cnt:>5} {frac:>8.1%}")
+
+    print("\n--- Dominant error sink per class (where each class leaks most) ---")
+    print(f"{'True':<38} {'leaks most to':<38} {'N':>5} {'% of true':>9}")
+    print("-" * 94)
+    rows = []
+    for t in range(n):
+        off = cm[t].clone()
+        off[t] = 0
+        if off.sum().item() == 0:
+            continue
+        p = int(off.argmax().item())
+        cnt = int(off[p].item())
+        rows.append((cnt / per_class_total[t].item(), cnt, t, p))
+    rows.sort(reverse=True)
+    for frac, cnt, t, p in rows:
+        print(f"{class_names[t]:<38} → {class_names[p]:<36} {cnt:>5} {frac:>8.1%}")
+    print()
+
+
 def save_heatmap(cm: torch.Tensor, class_names: List[str], save_path: Path) -> None:
     per_class_total = cm.sum(dim=1).float()
     cm_norm = (cm.float() / per_class_total.unsqueeze(1).clamp(min=1)).numpy()
@@ -146,7 +184,23 @@ def main(cfg: DictConfig) -> None:
     pretrained_used = bool(ckpt.get("pretrained", cfg.model.pretrained))
     num_frames = int(ckpt.get("num_frames", cfg.dataset.num_frames))
     num_classes = int(ckpt.get("num_classes", cfg.model.num_classes))
-    eval_transform = VideoTransform(cfg, is_training=False, use_imagenet_norm=pretrained_used)
+
+    # Resolve image_size in a model-agnostic way:
+    #   1. checkpoint's own saved config (VJEPA stores 256)
+    #   2. current Hydra cfg
+    #   3. 224 (universal default — correct for VideoMAE / SlowFast / EfficientNet)
+    # Models that never set image_size keep the previous 224 behaviour unchanged.
+    ckpt_cfg = ckpt.get("config") or {}
+    if not isinstance(ckpt_cfg, dict):  # OmegaConf → plain dict
+        ckpt_cfg = OmegaConf.to_container(OmegaConf.create(ckpt_cfg), resolve=True)
+    ckpt_dataset = ckpt_cfg.get("dataset", {}) if isinstance(ckpt_cfg, dict) else {}
+    image_size = int(
+        ckpt_dataset.get("image_size", cfg.dataset.get("image_size", 224))
+    )
+    print(f"Using image_size={image_size}, num_frames={num_frames}")
+    eval_transform = VideoTransform(
+        cfg, is_training=False, use_imagenet_norm=pretrained_used, image_size=image_size
+    )
 
     val_dir = Path(cfg.dataset.val_dir).resolve()
     val_samples = collect_video_samples(val_dir)
@@ -174,6 +228,7 @@ def main(cfg: DictConfig) -> None:
 
     class_names = get_class_names(val_dir, num_classes)
     print_per_class_table(cm, class_names)
+    print_top_confusions(cm, class_names, top_k=30)
 
     heatmap_path = checkpoint_path.with_name(checkpoint_path.stem + "_confusion.png")
     save_heatmap(cm, class_names, heatmap_path)

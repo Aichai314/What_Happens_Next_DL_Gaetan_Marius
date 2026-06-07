@@ -29,17 +29,6 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-# The "Arrow of Time" Dictionary
-# Maps a class ID to its perfect temporal opposite
-REVERSIBLE_CLASSES = {
-    0: 10, 10: 0,   # Closing <-> Opening
-    1: 31, 31: 1,   # Covering <-> Uncovering
-    3: 32, 32: 3,   # Folding <-> Unfolding
-    6: 7, 7: 6,     # Moving away <-> Moving closer
-    8: 9, 9: 8,     # Moving down <-> Moving up
-    18: 19, 19: 18, # Left-to-right <-> Right-to-left
-    22: 28, 28: 22  # Putting into <-> Taking out of
-}
 
 def _list_frame_paths(video_dir: Path) -> List[Path]:
     """All image files in a video folder, sorted by name."""

@@ -19,11 +19,11 @@ defaults:
 training:
   checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_vjepa2_large_t16.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_vjepa2_large_t16.pt
-  epochs: 12
+  epochs: 4                       # val loss bottoms early; rest is overfit
   batch_size: 2
   gradient_accumulation_steps: 8  # effective batch = 16
   lr: 0.0001
-  backbone_lr_factor: 0.1         # same unfreeze as the 4-frame run
+  backbone_lr_factor: 0.03        # low-overfit regime, same as the 4-frame run
   optimizer: adamw
   weight_decay: 0.05
   scheduler: warmup_cosine

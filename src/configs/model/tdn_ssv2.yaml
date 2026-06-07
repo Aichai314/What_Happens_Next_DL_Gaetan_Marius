@@ -1,0 +1,13 @@
+# @package _global_
+model:
+  name: tdn_ssv2
+  num_classes: 33
+  pretrained: true
+  num_segments: 8          # matches the released SSv2 ResNet50-8f checkpoint
+  frames_per_segment: 5    # TDN short-term TDM is wired for exactly 5
+  dropout: 0.5             # TSN structural slot (no params) — keep 0.5 to match the SSv2 ckpt build
+  head_dropout: 0.5
+  # Official SSv2 R50-8f weights (top-1 64.0%). Stored on the training box
+  # (shared session has no room — see project_checkpoint_path memory):
+  #   gdown --folder https://drive.google.com/drive/folders/14pZ1W_Mh8nR4e1ziEz7AFpgbz-79HpIC
+  pretrained_ckpt: /Data/marius.truquin/Model_checkpoints/tdn_r50_ssv2_8f.pth

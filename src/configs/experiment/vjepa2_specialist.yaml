@@ -1,0 +1,47 @@
+# @package _global_
+# 9-class confusion specialist (VJEPA-Large backbone).
+# Targets the two error clusters from the VJEPA confusion analysis:
+#   G1 (vertical/lift): 002 Dropping-into, 009 Moving-up, 011 Picking-up,
+#                        014 Pretending-pick-up, 030 Turning-upside-down
+#   G2 (real vs pretend): 016 Pretending-put-into, 017 Pretending-throw,
+#                         022 Putting-into, 029 Throwing
+#
+# Same 4 frames as everyone else (no extra temporal info). The lever here is
+# *class rebalancing* (Moving-up has 3170 train vids vs Dropping-into 903) +
+# *capacity focus* on 9 classes instead of 33. Its 9-way softmax becomes extra
+# features for the XGBoost stack — NOT a standalone Kaggle submission.
+#
+# Trained by the standalone script (NOT train.py):
+#   python src/train_specialist.py experiment=vjepa2_specialist
+defaults:
+  - override /model: vjepa2_large
+
+model:
+  num_classes: 9                  # 33 -> 9 (remapped by train_specialist.py)
+
+training:
+  checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/best_model_vjepa2_specialist.pt
+  latest_checkpoint_path: ${hydra:runtime.cwd}/Model_checkpoints/latest_model_vjepa2_specialist.pt
+  epochs: 6
+  batch_size: 2
+  gradient_accumulation_steps: 8  # effective batch = 16
+  lr: 0.0001
+  backbone_lr_factor: 0.03        # gentle adapt, same as the main VJEPA run
+  optimizer: adamw
+  weight_decay: 0.05
+  scheduler: warmup_cosine
+  warmup_epochs: 1
+  label_smoothing: 0.1
+  augmentation: true
+  num_workers: 4
+  mixup_alpha: 0.0                # balanced sampling is the regulariser here
+  balanced_sampling: true         # WeightedRandomSampler over the 9 classes
+
+dataset:
+  num_frames: 4                   # matches the only data we have (4 jpg/video)
+  image_size: 256                 # VJEPA-Large native resolution
+
+augmentation:
+  temporal_drop_prob: 0.0         # only 4 frames: dropping one = info loss
+  grayscale_prob: 0.2
+  blur_prob: 0.2
