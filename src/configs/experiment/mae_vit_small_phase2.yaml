@@ -11,12 +11,12 @@ model:
   attn_drop: 0.1     # Dropout inside attention matrices
   proj_drop: 0.1     # Dropout in MLP blocks
   head_drop: 0.5     # Dropout before the final classifier
-  # pretrained_encoder: ${hydra:runtime.cwd}/mae_small_7045.pt # Path to the pretrained MAE encoder checkpoint
+  pretrained_encoder: ${hydra:runtime.cwd}/mae_small_7045.pt # Path to the pretrained MAE encoder checkpoint
 
 training:
   augmentation: true
   mixup_alpha: 0.4
-  epochs: 60
+  epochs: 100
   batch_size: 64
   num_workers: 12
   lr: 5e-4
@@ -28,7 +28,7 @@ training:
   backbone_lr_factor: 0.75 # Layer-wise Learning Rate Decay factor but we wrap it in backbone_lr_factor for backward compatibility
   checkpoint_path: ${hydra:runtime.cwd}/best_model_mae.pt
   latest_checkpoint_path: ${hydra:runtime.cwd}/latest_model_mae.pt
-  resume_from: ${hydra:runtime.cwd}/latest_model_mae.pt
+  #resume_from: ${hydra:runtime.cwd}/latest_model_mae.pt
   use_ema: true         # Exponential Moving Average
   use_swa: true         # Stochastic Weight Averaging
   swa_start_epoch: 45   # Start SWA in the final ~25% of training

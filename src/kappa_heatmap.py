@@ -150,8 +150,8 @@ def plot_kappa_kl_heatmap(
     short_names = [n.split("/")[-1].replace(".pt", "") for n in model_names]
 
     fig, axes = plt.subplots(
-        1, 2,
-        figsize=(max(16, len(model_names) * 1.8), max(6, len(model_names) * 0.8))
+        2, 1,
+        figsize=(max(16, len(model_names)), max(6, len(model_names) * 1.8))
     )
 
     mask = np.zeros_like(kappa_matrix, dtype=bool)
@@ -205,7 +205,7 @@ def plot_kappa_kl_heatmap(
 
     plt.show()
 
-def load_model_probabilities(model_path: str, val_dir: str) -> np.ndarray:
+def load_model_probabilities(model_path: str, val_dir: str, tta: bool) -> np.ndarray:
     """
     Placeholder function to load model probabilities from checkpoints.
 
@@ -215,11 +215,12 @@ def load_model_probabilities(model_path: str, val_dir: str) -> np.ndarray:
     Args:
         model_path: path to a single checkpoint
         val_dir: path to the validation directory
+        tta: whether to use test-time augmentation
 
     Returns:
         (N, C) probability array
     """
-    cache_path = _get_cache_path(model_path, val_dir)
+    cache_path = _get_cache_path(model_path, val_dir, TTA=tta)
     if cache_path.exists():
         print(f"Loading cached logits from {cache_path.name}...")
         expert_probs = np.load(cache_path)
@@ -262,24 +263,27 @@ def main(cfg: DictConfig) -> None:
     #     "checkpoints/efficientnet_tdm_39-87.pt",
     # ]
     my_models = [
+        "checkpoints/timesformer_best_24-98.pt",
         "checkpoints/attn_stage2_best_38-99.pt",
         "checkpoints/best_model_cnn_lstm_30-75.pt",
         "checkpoints/best_model_trn_32-90.pt",
         "checkpoints/best_model_x3d_xs_29-64.pt",
         "checkpoints/R2Plus1D_high_ov_34-29.pt",
-        "checkpoints/convnext_best_27-04.pt",
-        "checkpoints/timesformer_best_24-98.pt",
+        "checkpoints/convnextv2_nano_30-36.pt",
         "checkpoints/efficientnetb0_motion_37-33.pt",
         "checkpoints/efficientnetb0_spatial_41-59.pt",
         "checkpoints/efficientnetb0_spatial_assym_41-11.pt",
-        "checkpoints/efficientnetb0_6chan_39-93.pt",
         "checkpoints/efficientnetb0_tdn_40-13.pt",
+        "checkpoints/efficientformer_tsm_attn_35-67.pt",
+        "checkpoints/coatnet_tsm_37-21.pt",
+        "checkpoints/mae_small_phase2_22-22.pt",
+        "checkpoints/resnext_tsm_39-76.pt",
     ]
 
     val_dir = str(Path(cfg.dataset.val_dir).resolve())
     
     model_probs = {
-        name: load_model_probabilities(name, val_dir) for name in my_models
+        name: load_model_probabilities(name, val_dir, tta=True) for name in my_models
     }
     
     kappa_matrix, model_names = compute_kappa_matrix(model_probs)

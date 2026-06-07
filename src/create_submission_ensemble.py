@@ -159,11 +159,11 @@ def main(cfg: DictConfig) -> None:
         "checkpoints/efficientnetb0_motion_37-33.pt",
         "checkpoints/efficientnetb0_spatial_41-59.pt",
         "checkpoints/efficientnetb0_spatial_assym_41-11.pt",
-        "checkpoints/efficientnetb0_6chan_39-93.pt",
         "checkpoints/efficientnetb0_tdn_40-13.pt",
-        #"checkpoints/efficientformer_tsm_attn_35-67.pt",
+        "checkpoints/efficientformer_tsm_attn_35-67.pt",
         "checkpoints/coatnet_tsm_37-21.pt",
         "checkpoints/mae_small_phase2_22-22.pt",
+        "checkpoints/resnext_tsm_39-76.pt",
     ]
 
     # PHASE 1: Train Meta-Learner & TTA Weights
@@ -177,7 +177,7 @@ def main(cfg: DictConfig) -> None:
     meta_model, label_encoder, tta_modules = evaluate_and_stack_n_models(
         my_models,
         str(val_dir),
-        meta_learner='both',           # <--- Handles both LR and Attention dynamically
+        meta_learner='attention',           # <--- Handles both LR and Attention dynamically
         use_bayesian_optimization=False,
         TTA=use_tta,
         use_cache=True
